@@ -6,6 +6,7 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 VAULT_FILE = "passwords3.json"
 ITERATIONS = 1_000_000
+KEY_CHECK_STRING = "MasterKeyValidation"
 
 def derive_key(pw: str, salt: bytes) -> bytes:
     kdf = PBKDF2HMAC(hashes.SHA256(), 32, salt, ITERATIONS)
@@ -18,40 +19,56 @@ def decrypt(token: str, key: bytes) -> bytes:
     return Fernet(key).decrypt(token.encode())
 
 def load_vault(master_pw: str):
+    # Create new passwords file if it doesn't exist
     if not os.path.exists(VAULT_FILE):
-        print("Creating new vault...")
+        print("Creating new password vault...")
         salt = os.urandom(16)
         key = derive_key(master_pw, salt)
-        vault = {"salt": base64.urlsafe_b64encode(salt).decode(), "entries": {}}
+        vault = {
+        "salt": base64.urlsafe_b64encode(salt).decode(),
+        "canary": encrypt(KEY_CHECK_STRING, key),
+        "entries": {}
+    }
+
+        # Write the new passwords file to disk
         with open(VAULT_FILE, "w", encoding="utf-8") as f:
             json.dump(vault, f, indent=2)
-        try: os.chmod(VAULT_FILE, 0o600)
-        except: pass
-        return key, {}, salt
 
+        return key, {}, salt
+    
+    # Load existing passwords file
     with open(VAULT_FILE, encoding="utf-8") as f:
         vault = json.load(f)
 
+    # Get the current salt and master key
     salt = base64.urlsafe_b64decode(vault["salt"])
     key = derive_key(master_pw, salt)
 
-    entries = vault.get("entries", {})
-    if entries:
-        sample = next(iter(entries.values()))
+    # Verify password using the canary (works even if entries is empty)
+    if "canary" in vault:
         try:
-            decrypt(sample, key)  # test one decryption
+            if decrypt(vault["canary"], key).decode() != KEY_CHECK_STRING:
+                print("Wrong master password!")
+                exit()
         except:
             print("Wrong master password!")
             exit()
 
-    return key, entries, salt
+    encrypted_entries = vault.get("entries", {})
 
-def save_vault(entries: dict, salt: bytes):
-    vault = {"salt": base64.urlsafe_b64encode(salt).decode(), "entries": entries}
+    return key, encrypted_entries, salt
+
+def save_vault(encrypted_entries: dict, salt: bytes, key: bytes):
+    vault = {
+        "salt": base64.urlsafe_b64encode(salt).decode(),
+        "canary": encrypt(KEY_CHECK_STRING, key),
+        "entries": encrypted_entries
+    }
+
     with open(VAULT_FILE, "w", encoding="utf-8") as f:
         json.dump(vault, f, indent=2)
-    try: os.chmod(VAULT_FILE, 0o600)
-    except: pass
+
+    return
 
 def change_master_password():
     print("\n=== Change Master Password ===")
@@ -74,21 +91,22 @@ def change_master_password():
         print("Wrong current password!")
         return
 
-    # 2. Derive a completely NEW salt and NEW key from the new password
+    # 2. Derive a completely new salt and new key from the new password
     new_salt = os.urandom(16)
     new_key = derive_key(new_pw, new_salt)
 
     # 3. Re-encrypt every single blob with the new key
-    new_entries = {}
+    new_encrypted_entries = {}
     for eid, old_blob in temp_entries.items():
         # Decrypt with old key
         plaintext = decrypt(old_blob, temp_key).decode()
+
         # Encrypt again with new key
         new_blob = encrypt(plaintext, new_key)
-        new_entries[eid] = new_blob
+        new_encrypted_entries[eid] = new_blob
 
     # 4. Save with the new salt and new encrypted blobs
-    save_vault(new_entries, new_salt)
+    save_vault(new_encrypted_entries, new_salt, new_key)
     print("Master password changed successfully!")
 
 def main():
@@ -102,6 +120,7 @@ def main():
 
         # ── ADD / UPDATE ─────────────────────────────────────
         if choice == "1":
+            existing_id = None
             site = input("Site: ").strip()
             if not site:
                 print("Site name cannot be empty!")
@@ -138,7 +157,7 @@ def main():
             entry_id = str(uuid.uuid4())[:8]
 
             encrypted_entries[entry_id] = encrypted_blob
-            save_vault(encrypted_entries, salt)
+            save_vault(encrypted_entries, salt, key)
             print(f"Saved → ID: {entry_id}")
 
         # ── GET PASSWORD ───────────────────────────────────────
@@ -204,7 +223,7 @@ def main():
                 except:
                     site = "(unknown)"
                 del encrypted_entries[eid]
-                save_vault(encrypted_entries, salt)
+                save_vault(encrypted_entries, salt, key)
                 print(f"Deleted → {data['site'], data['account']}")
                 data = None
             else:
