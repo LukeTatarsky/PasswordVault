@@ -39,6 +39,13 @@ def display_entry(entries: dict, key: bytes, eid: str):
     print(f"Account      : {data.get('account') or ''}")
     print(f"Password     : {data.get('password') or ''}")
     # print(f"Password   : {'*' * len(data['password']) if data['password'] else ''}")
+    print(f"Note         :")
+    note = data.get('note', '')
+    if note:
+        print("-" * 40)
+        print(note)
+        note = ''
+        print("-" * 40)
     print(f"Created      : {pendulum.parse(data['created_date']).format(DT_FORMAT)}")
     print(f"Last Edited  : {pendulum.parse(data['edited_date']).format(DT_FORMAT)}\n")
     data = None
@@ -156,12 +163,22 @@ def main():
 
             password = getpass.getpass("Password: ").strip()
 
+            print("Enter note (press Enter twice to finish):")
+            note = ""
+            while True:
+                line = input()
+                if line == "" and note.endswith("\n"):  # two enters in a row
+                    break
+                note += line + "\n"
+            note = note.strip()
+
             created_date = pendulum.now().to_iso8601_string()
 
             # create the blob
             entry = json.dumps({"site": site,
                                 "account": account,
                                 "password": password,
+                                "note": note,
                                 "created_date": created_date,
                                 "edited_date": created_date}, separators=(',', ':'))
             
@@ -194,22 +211,23 @@ def main():
             print("  1. Site")
             print("  2. Account")
             print("  3. Password")
-            print("  4. Everything")
-            print("  5. Delete")
-            print("  6. Cancel")
+            print("  4. Note")
+            print("  5. Everything")
+            print("  6. Delete")
+            print("  7. Cancel")
             sub = input("> ").strip()
 
-            if sub == "6":
+            if sub == "7":
                 print("Edit cancelled.")
                 continue
-            if sub not in ["1", "2", "3", "4", "5"]:
+            if sub not in ["1", "2", "3", "4", "5", "6"]:
                 print("Invalid choice.")
                 continue
 
             data =  get_entry_data(encrypted_entries, key, eid)
 
             # Delete entry
-            if sub == "5":
+            if sub == "6":
                 confirm = input(f"Are you sure you want to delete entry '{data['site']}'? (y/N): ").strip().lower()
                 if confirm == "y":
                     del encrypted_entries[eid]
@@ -225,16 +243,26 @@ def main():
             new_account = data.get('account') or ''
             new_password = data.get('password') or ''
 
-            if sub in ["1", "4"]:
+            if sub in ["1", "5"]:
                 new_site = input(f"New site [{new_site}]: ").strip()
                 if not new_site:
                     print("Site name cannot be empty!")
                     continue
-            if sub in ["2", "4"]:
+            if sub in ["2", "5"]:
                 new_account = input(f"New account [{new_account or '(none)'}]: ").strip()
                 # new_account = new_account or ''
-            if sub in ["3", "4"]:
+            if sub in ["3", "5"]:
                 new_password = getpass.getpass("New password: ").strip()
+            if sub in ["4", "5"]:
+                print("Enter new note (press Enter twice to finish):")
+                note = ""
+                while True:
+                    line = input()
+                    if line == "" and note.endswith("\n"):  # two enters in a row
+                        break
+                    note += line + "\n"
+                note = note.strip()
+                data['note'] = note
             
             # Update timestamps
             now_iso = pendulum.now().to_iso8601_string()
@@ -278,6 +306,10 @@ def main():
             )
             for eid, (site, account) in sorted_entries:
                 print(f"{eid:>3} → {site:>10} {account}")
+
+            # Clear temp
+            entries = {}
+            sorted_entries = {}
 
         # ── CHANGE MASTER PW ───────────────────────────────────────────────
         elif choice == "5":
