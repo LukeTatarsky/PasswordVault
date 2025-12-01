@@ -1,0 +1,6 @@
+# .gitignore
+password_vault*.json
+*.pyc
+__pycache__/
+.vscode/
+personal_notes.txt

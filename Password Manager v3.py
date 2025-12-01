@@ -1,11 +1,12 @@
-# Password Manager v3 — Zero Cache
+# MyVault Password Manager v3
+# Local password manager with strong encryption and random password generation.
 import os, json, getpass, base64, uuid, pendulum, time, threading, pyperclip, atexit
 import string, secrets, re
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
-VAULT_FILE = "passwords3.json"
+VAULT_FILE = "password_vault.json"
 ITERATIONS = 1_000_000
 KEY_CHECK_STRING = "MasterKeyValidation"
 DT_FORMAT = "MMM D, YYYY hh:mm:ss A"
@@ -18,7 +19,7 @@ PASS_DEFAULTS = {
         "min_digits":      3,
         "min_symbols":     3,
         "avoid_ambiguous": True,
-        "max_consecutive": 1,   # no more than 2 same chars in a row
+        "max_consecutive": 1,   # no more than x same chars in a row
         "ambiguous_chars": "lI1O08",
         "symbols_pool":   "!@#()[]|?$%^*_-+.,=",
         "bank_safe_symbols":   "!@#$%^*_-+=",
