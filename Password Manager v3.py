@@ -1,5 +1,5 @@
 # Password Manager v3 — Zero Cache
-import os, json, getpass, base64, uuid, pendulum
+import os, json, getpass, base64, uuid, pendulum, time, threading, pyperclip, atexit
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -30,15 +30,17 @@ def get_entry_data(entries: dict, key: bytes, eid: str):
 
     return data 
     
-def display_entry(entries: dict, key: bytes, eid: str):
+def display_entry(entries: dict, key: bytes, eid: str, show_password: bool = False) -> int:
     data = get_entry_data(entries, key, eid)
     if data == {}:
         return 1
 
     print(f"Site         : {data['site']}")
     print(f"Account      : {data.get('account') or ''}")
-    print(f"Password     : {data.get('password') or ''}")
-    # print(f"Password   : {'*' * len(data['password']) if data['password'] else ''}")
+    if show_password:
+        print(f"Password     : {data.get('password') or ''}")
+    else:
+        print(f"Password     : {'*' * len(data['password']) if data['password'] else ''}")
     print(f"Note         :")
     note = data.get('note', '')
     if note:
@@ -50,6 +52,50 @@ def display_entry(entries: dict, key: bytes, eid: str):
     print(f"Last Edited  : {pendulum.parse(data['edited_date']).format(DT_FORMAT)}\n")
     data = None
     return 0
+
+def copy_to_clipboard(text: str, timeout: int = 30) -> None:
+    """
+    Copies text to clipboard and auto-clears after `timeout` seconds
+    if the clipboard still contains the original text.
+    """
+    if not text:
+        return
+
+    # Copy to clipboard
+    pyperclip.copy(text)
+    print(f"Password copied! (auto-clears in {timeout}s)", flush=True)
+
+    if timeout <= 0:
+        return
+
+    # Store original text for comparison
+    original_text = text
+
+    def auto_clear():
+        time.sleep(timeout)
+        try:
+            # Re-import in thread to avoid issues
+            import pyperclip as clippy
+            current = clippy.paste()
+            if current == original_text:
+                pyperclip.copy(40 * "-")
+                time.sleep(0.05)
+                pyperclip.copy("")
+        except Exception:
+            # prevent clipboard errors from crashing program
+            pass
+
+    # Starts a new thread to clear clipboard. Dies when main program exits
+    threading.Thread(target=auto_clear, daemon=True).start()
+    return
+
+def force_clear_on_exit():
+    try:
+        pyperclip.copy(40 * "-")
+        time.sleep(0.05)
+        pyperclip.copy("")
+    except:
+        pass
 
 def load_vault(master_pw: str):
     # Create new passwords file if it doesn't exist
@@ -103,6 +149,74 @@ def save_vault(encrypted_entries: dict, salt: bytes, key: bytes):
 
     return
 
+def list_entries(encrypted_entries: dict, key: bytes):
+    if not encrypted_entries:
+        print("Empty vault")
+        return
+    print("\nYour entries:")
+    entries = {}
+
+    for eid, blob in encrypted_entries.items():
+        try:
+            data = json.loads(decrypt(blob, key).decode())
+            entries[eid] = (data['site'], data.get("account", ""))
+        except:
+            print(f"  {eid} → [corrupted]")
+    data = None
+
+    # Sort by site name, then account
+    sorted_entries = sorted(
+        entries.items(),
+        key=lambda entry: (entry[1][0].lower(), entry[1][1].lower())
+    )
+    for eid, (site, account) in sorted_entries:
+        print(f"{eid:>3} → {site:>10} {account}")
+
+    # Clear temp
+    entries = {}
+    sorted_entries = {}
+    return
+
+def search_entries(encrypted_entries: dict, key: bytes):
+    if not encrypted_entries:
+        print("Empty vault")
+        return
+    query = input("Enter search term: ").strip().lower()
+    if not query:
+        print("Empty search — cancelled")
+        return
+    
+    print("\nYour entries:")
+    matches = {}
+
+    for eid, blob in encrypted_entries.items():
+        try:
+            data = json.loads(decrypt(blob, key).decode())
+            text = " ".join([
+                data.get("site", ""),
+                data.get("account", ""),
+                data.get("note", ""),
+            ]).lower()
+            if query in text:
+                matches[eid] = (data['site'], data.get("account", ""))
+        except:
+            print(f"  {eid} → [corrupted]")
+
+    data = None
+
+    # Sort by site name, then account
+    sorted_entries = sorted(
+        matches.items(),
+        key=lambda entry: (entry[1][0].lower(), entry[1][1].lower())
+    )
+    for eid, (site, account) in sorted_entries:
+        print(f"{eid:>3} → {site:>10} {account}")
+
+    # Clear temp
+    entries = {}
+    sorted_entries = {}
+    return
+
 def change_master_password():
     print("\n=== Change Master Password ===")
     old_pw = getpass.getpass("Current master password: ").strip()
@@ -147,9 +261,11 @@ def main():
     print("- Ultimate Password Manager —\n")
     master_pw = getpass.getpass("Master password: ").strip()
     key, encrypted_entries, salt = load_vault(master_pw)
+    # clears clipboard on exit
+    atexit.register(force_clear_on_exit)
 
     while True:
-        print("\n1. Add   2. Get   3. Edit    4. List Sites   5. Change Master PW   6. Quit")
+        print("\n1. Add   2. Get   3. Edit   4. List Sites   5. Search  6. Change Master PW   7. Quit")
         choice = input("> ").strip()
 
         # ── ADD ENTRY ─────────────────────────────────────
@@ -163,11 +279,11 @@ def main():
 
             password = getpass.getpass("Password: ").strip()
 
-            print("Enter note (press Enter twice to finish):")
+            print("Enter note (press Enter 3x to finish):")
             note = ""
             while True:
                 line = input()
-                if line == "" and note.endswith("\n"):  # two enters in a row
+                if line == "" and note.endswith("\n\n"):  # two enters in a row
                     break
                 note += line + "\n"
             note = note.strip()
@@ -197,6 +313,38 @@ def main():
             res = display_entry(encrypted_entries, key, eid)
             if res != 0:
                 continue
+
+            # ── PRESS C TO COPY ──
+            password_shown = False
+
+            while True:
+                if not password_shown:
+                    action = "(C)opy password  (S)how password  (Enter) skip"
+                else:
+                    action = "(C)opy password  (Enter) continue"
+
+                print(f"{action}\n", end="> ", flush=True)
+                choice_2 = input().strip().lower()
+
+                if choice_2 == "c":
+                    pw = get_entry_data(encrypted_entries, key, eid).get("password") or ""
+                    copy_to_clipboard(pw, timeout=30)
+                    pw = None
+                    break
+
+                elif choice_2 == "s" and not password_shown:
+                    print(f"ID: {eid}")
+                    res = display_entry(encrypted_entries, key, eid, show_password=True)
+                    if res != 0:
+                        continue
+                    password_shown = True
+
+                elif choice_2 in {"", "q", "enter"}:
+                    break
+
+                else:
+                    print("\rInvalid — press C, S, or Enter           ", end="", flush=True)
+                    time.sleep(0.5)
         
         # ── EDIT ENTRY ───────────────────────────────────────
         elif choice == "3":
@@ -250,15 +398,14 @@ def main():
                     continue
             if sub in ["2", "5"]:
                 new_account = input(f"New account [{new_account or '(none)'}]: ").strip()
-                # new_account = new_account or ''
             if sub in ["3", "5"]:
                 new_password = getpass.getpass("New password: ").strip()
             if sub in ["4", "5"]:
-                print("Enter new note (press Enter twice to finish):")
+                print("Enter new note (press Enter 3x to finish):")
                 note = ""
                 while True:
                     line = input()
-                    if line == "" and note.endswith("\n"):  # two enters in a row
+                    if line == "" and note.endswith("\n\n"):  # three enters in a row
                         break
                     note += line + "\n"
                 note = note.strip()
@@ -283,40 +430,19 @@ def main():
 
         # ── LIST SITES ─────────────────────────────────────────
         elif choice == "4":
-            if not encrypted_entries:
-                print("Empty vault")
-                continue
-            print("\nYour entries:")
-            entries = {}
+            list_entries(encrypted_entries, key)
 
-            for eid, blob in encrypted_entries.items():
-                try:
-                    data = json.loads(decrypt(blob, key).decode())
-                    account = f" ({data.get('account')})" if data.get('account') else ""
-                    entries[eid] = (data['site'], account)
-                    # print(f"  {eid} → {data['site']}{account}")
-                except:
-                    print(f"  {eid} → [corrupted]")
-            data = None
-
-            # Sort by site name, then account
-            sorted_entries = sorted(
-                entries.items(),
-                key=lambda entry: (entry[1][0].lower(), entry[1][1].lower())
-            )
-            for eid, (site, account) in sorted_entries:
-                print(f"{eid:>3} → {site:>10} {account}")
-
-            # Clear temp
-            entries = {}
-            sorted_entries = {}
+        # ── SEARCH ───────────────────────────────────────────────
+        elif choice == "5":
+            search_entries(encrypted_entries, key)
 
         # ── CHANGE MASTER PW ───────────────────────────────────────────────
-        elif choice == "5":
+        elif choice == "6":
             change_master_password()
 
         # ── QUIT ───────────────────────────────────────────────
-        elif choice == "6":
+        elif choice == "7":
+            pyperclip.copy("")
             print("Goodbye!")
             break
 
