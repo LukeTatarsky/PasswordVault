@@ -1,5 +1,6 @@
 # Password Manager v3 — Zero Cache
 import os, json, getpass, base64, uuid, pendulum, time, threading, pyperclip, atexit
+import string, secrets, re
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -8,6 +9,20 @@ VAULT_FILE = "passwords3.json"
 ITERATIONS = 1_000_000
 KEY_CHECK_STRING = "MasterKeyValidation"
 DT_FORMAT = "MMM D, YYYY hh:mm:ss A"
+
+# Industry standard password defaults
+PASS_DEFAULTS = {
+        "length":          20,
+        "min_lower":       4,
+        "min_upper":       3,
+        "min_digits":      3,
+        "min_symbols":     3,
+        "avoid_ambiguous": True,
+        "max_consecutive": 1,   # no more than 2 same chars in a row
+        "ambiguous_chars": "lI1O08",
+        "symbols_pool":   "!@#()[]|?$%^*_-+.,=",
+        "bank_safe_symbols":   "!@#$%^*_-+=",
+    }
 
 def derive_key(pw: str, salt: bytes) -> bytes:
     kdf = PBKDF2HMAC(hashes.SHA256(), 32, salt, ITERATIONS)
@@ -96,6 +111,150 @@ def force_clear_on_exit():
         pyperclip.copy("")
     except:
         pass
+
+def max_consecutive_chars(pw: str) -> int:
+    """
+    Check to see if there are too many consecutive identical characters.
+    """
+    max_run = 1
+    current_run = 1
+    
+    for a, b in zip(pw, pw[1:]):
+        if a == b:
+            current_run += 1
+            if current_run > max_run:
+                max_run = current_run
+        else:
+            current_run = 1
+    
+    return max_run
+
+def get_int(prompt: str, default=None):
+    """
+    Ensures user inputs a valid integer.
+    """
+    while True:
+        val = input(prompt).strip()
+        if val == "" and default is not None:
+            return default
+        if re.fullmatch(r"\d+", val):
+            return int(val)
+        print("   Invalid — numbers only")
+
+def random_password(length: int = PASS_DEFAULTS["length"],
+    min_upper: int = PASS_DEFAULTS["min_upper"],
+    min_lower: int = PASS_DEFAULTS["min_lower"],
+    min_nums: int = PASS_DEFAULTS["min_digits"],
+    min_syms: int = PASS_DEFAULTS["min_symbols"], 
+    avoid_ambig = PASS_DEFAULTS["avoid_ambiguous"]) -> str:
+    """
+    Generate a strong random password.
+    Uses secrets module → cryptographically secure.
+    """
+    if length < (min_upper + min_lower + min_nums + min_syms):
+        raise ValueError(f"Length {length} too short for requirements")
+
+    # Define character pools
+    lower = string.ascii_lowercase
+    upper = string.ascii_uppercase
+    nums  = string.digits
+    syms  = PASS_DEFAULTS["symbols_pool"]
+
+    # Remove ambiguous chars
+    if avoid_ambig:
+        exclude = PASS_DEFAULTS["ambiguous_chars"]
+        lower = ''.join(c for c in lower if c not in exclude)
+        upper = ''.join(c for c in upper if c not in exclude)
+        nums  = ''.join(c for c in nums  if c not in exclude)
+
+    # Add a bit more weight to lower case letter and create a pool 
+    all_chars = lower + upper + nums + syms
+
+    # Step 1: Guarantee minimums
+    password = []
+    password.extend(secrets.choice(upper) for _ in range(min_upper))
+    password.extend(secrets.choice(lower) for _ in range(min_lower))
+    password.extend(secrets.choice(nums)  for _ in range(min_nums))
+    password.extend(secrets.choice(syms)  for _ in range(min_syms))
+
+    # Step 2: Fill the rest randomly
+    remaining = length - len(password)
+    password.extend(secrets.choice(all_chars) for _ in range(remaining))
+
+    # Step 3: Shuffle so required chars aren't clumped at start
+    secrets.SystemRandom().shuffle(password)
+    pw = ''.join(password)
+    # Step 4: Ensure no excessive consecutive identical chars, reshuffle if needed
+    while max_consecutive_chars(pw) > PASS_DEFAULTS["max_consecutive"]:
+        secrets.SystemRandom().shuffle(password)
+        pw = ''.join(password)
+
+    return pw
+
+def ask_password(prompt: str = "Password:") -> str:
+    """
+    Asks user for password with three easy options:
+      [Enter]     → type your own (min 8 chars)
+      g           → generate strong random one
+      c           → generate custom password
+    """
+    while True:
+        print(f"\n{prompt}:")
+        print("   • Type 'g' → generate strong 20-char password")
+        print("   • Type 'c' → generate customizable random password")
+        print("   • Press Enter to type your own")
+        choice = input(" → ").strip().lower()
+
+        if choice == "":
+            pw = getpass.getpass("Enter password (min length = 8): ").strip()
+            if len(pw) < 8:
+                print("   Password too short, try again.")
+                continue
+            return pw
+
+        elif choice in {"g", "gen", "generate"}:
+            pw = random_password(20)
+            print(f"   Generated: {pw} \a")
+
+            accept = input("\n   Accept this password? (y/n): ").strip().lower()
+            if accept != "y":
+                pw = ''
+                continue
+
+            copy = input("   Copy to clipboard? (y/n): ").strip().lower()
+            if copy == "y":
+                copy_to_clipboard(pw, timeout=60)
+
+            return pw
+
+        elif choice in {"c", "custom", "customizable"}:
+            pw_len = get_int("\n   Enter desired length (minimum 14, default 20): ")
+            if pw_len < 14:
+                print("   Length too short, using 20.")
+                pw_len = 20
+            min_upper = get_int("\n   Minimum upper case: ")
+            min_nums = get_int("\n   Minimum numbers: ")
+            min_symb = get_int("\n   Minimum symbols: ")
+
+            if pw_len < (min_upper + min_nums + min_symb):
+                print("   Requirements exceed length, try again.")
+                continue
+            pw = random_password(pw_len, min_upper, min_nums, min_symb)
+            print(f"\n   Generated: {pw}")
+
+            accept = input("\n   Accept this password? (y/n): ").strip().lower()
+            if accept != "y":
+                pw = ''
+                continue
+
+            copy = input("   Copy to clipboard? (y/n): ").strip().lower()
+            if copy == "y":
+                copy_to_clipboard(pw, timeout=30)
+
+            return pw
+        else:
+            print("Invalid — press Enter, 'g', or 's'")
+    
 
 def load_vault(master_pw: str):
     # Create new passwords file if it doesn't exist
@@ -213,7 +372,7 @@ def search_entries(encrypted_entries: dict, key: bytes):
         print(f"{eid:>3} → {site:>10} {account}")
 
     # Clear temp
-    entries = {}
+    matches = {}
     sorted_entries = {}
     return
 
@@ -277,7 +436,7 @@ def main():
                 continue
             account = input("Account: ").strip()
 
-            password = getpass.getpass("Password: ").strip()
+            password = ask_password("New password")
 
             print("Enter note (press Enter 3x to finish):")
             note = ""
