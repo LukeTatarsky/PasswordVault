@@ -1,5 +1,5 @@
 # Password Manager v3 — Zero Cache
-import os, json, getpass, base64, uuid
+import os, json, getpass, base64, uuid, pendulum
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -7,6 +7,7 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 VAULT_FILE = "passwords3.json"
 ITERATIONS = 1_000_000
 KEY_CHECK_STRING = "MasterKeyValidation"
+DT_FORMAT = "MMM D, YYYY hh:mm:ss A"
 
 def derive_key(pw: str, salt: bytes) -> bytes:
     kdf = PBKDF2HMAC(hashes.SHA256(), 32, salt, ITERATIONS)
@@ -17,6 +18,31 @@ def encrypt(text: str, key: bytes) -> str:
 
 def decrypt(token: str, key: bytes) -> bytes:
     return Fernet(key).decrypt(token.encode())
+
+def get_entry_data(entries: dict, key: bytes, eid: str):
+    data = {}
+    try:
+        data = json.loads(decrypt(entries[eid], key).decode()) 
+    except KeyError:
+        print("Not found.")
+    except:
+        print("Entry may be corrupted, cannot view.")
+
+    return data 
+    
+def display_entry(entries: dict, key: bytes, eid: str):
+    data = get_entry_data(entries, key, eid)
+    if data == {}:
+        return 1
+
+    print(f"Site         : {data['site']}")
+    print(f"Account      : {data.get('account') or ''}")
+    print(f"Password     : {data.get('password') or ''}")
+    # print(f"Password   : {'*' * len(data['password']) if data['password'] else ''}")
+    print(f"Created      : {pendulum.parse(data['created_date']).format(DT_FORMAT)}")
+    print(f"Last Edited  : {pendulum.parse(data['edited_date']).format(DT_FORMAT)}\n")
+    data = None
+    return 0
 
 def load_vault(master_pw: str):
     # Create new passwords file if it doesn't exist
@@ -109,85 +135,126 @@ def change_master_password():
     save_vault(new_encrypted_entries, new_salt, new_key)
     print("Master password changed successfully!")
 
+# ── MAIN PROGRAM ─────────────────────────────────────────
 def main():
     print("- Ultimate Password Manager —\n")
     master_pw = getpass.getpass("Master password: ").strip()
     key, encrypted_entries, salt = load_vault(master_pw)
 
     while True:
-        print("\n1. Add/Update   2. Get   3. List Sites   4. Delete   5. Change Master PW   6. Quit")
+        print("\n1. Add   2. Get   3. Edit    4. List Sites   5. Change Master PW   6. Quit")
         choice = input("> ").strip()
 
-        # ── ADD / UPDATE ─────────────────────────────────────
+        # ── ADD ENTRY ─────────────────────────────────────
         if choice == "1":
-            existing_id = None
-            site = input("Site: ").strip()
+            # Get info
+            site = input("Site (required): ").strip()
             if not site:
                 print("Site name cannot be empty!")
                 continue
-            account = input("Account (optional): ").strip()
-
-            # Look for existing entry with same site + account
-            for eid, blob in encrypted_entries.items():
-                try:
-                    data = json.loads(decrypt(blob, key).decode())
-                    if (data["site"].lower() == site.lower() and
-                        data.get("account", "") == account):
-                        existing_id = eid
-                        existing_site_display = data["site"]
-                        if account:
-                            existing_site_display += f" ({account})"
-                        break
-                except:
-                    continue
-            if existing_id:
-                print(f"\nEntry already exists, overwrite? (y/n):")
-                overwrite = input("> ").strip().lower()
-                if overwrite != "y":
-                    continue
+            account = input("Account: ").strip()
 
             password = getpass.getpass("Password: ").strip()
-            if not password:
-                print("Password cannot be empty!")
-                continue
-            
 
-            entry = json.dumps({"site": site, "account": account, "password": password}, separators=(',', ':'))
+            created_date = pendulum.now().to_iso8601_string()
+
+            # create the blob
+            entry = json.dumps({"site": site,
+                                "account": account,
+                                "password": password,
+                                "created_date": created_date,
+                                "edited_date": created_date}, separators=(',', ':'))
+            
             encrypted_blob = encrypt(entry, key)
+            entry = None
             entry_id = str(uuid.uuid4())[:8]
 
             encrypted_entries[entry_id] = encrypted_blob
             save_vault(encrypted_entries, salt, key)
             print(f"Saved → ID: {entry_id}")
 
-        # ── GET PASSWORD ───────────────────────────────────────
+        # ── GET ENTRY ───────────────────────────────────────
         elif choice == "2":
-            query = input("Enter ID: ").strip().lower()
-            found = False
-            corrupted = False
-            for eid, blob in encrypted_entries.items():
-                try:
-                    plain = decrypt(blob, key).decode()
-                    data = json.loads(plain)     
-                except:
-                    # print(f"  [corrupted entry] → {eid}")
-                    corrupted = True
-                    continue
+            eid = input("Enter ID: ").strip().lower()
 
-                if query == eid:
-                    print(f"\nID: {eid}")
-                    print(f"Site   : {data['site']}")
-                    print(f"Account  : {data.get('account') or '(none)'}")
-                    print(f"Password → {data['password']}")
-                    found = True
+            res = display_entry(encrypted_entries, key, eid)
+            if res != 0:
+                continue
+        
+        # ── EDIT ENTRY ───────────────────────────────────────
+        elif choice == "3":
+            eid = input("Enter ID: ").strip().lower()
+
+            res = display_entry(encrypted_entries, key, eid)
+            if res != 0:
+                continue
+
+            # Ask what to edit
+            print("What do you want to update?")
+            print("  1. Site")
+            print("  2. Account")
+            print("  3. Password")
+            print("  4. Everything")
+            print("  5. Delete")
+            print("  6. Cancel")
+            sub = input("> ").strip()
+
+            if sub == "6":
+                print("Edit cancelled.")
+                continue
+            if sub not in ["1", "2", "3", "4", "5"]:
+                print("Invalid choice.")
+                continue
+
+            data =  get_entry_data(encrypted_entries, key, eid)
+
+            # Delete entry
+            if sub == "5":
+                confirm = input(f"Are you sure you want to delete entry '{data['site']}'? (y/N): ").strip().lower()
+                if confirm == "y":
+                    del encrypted_entries[eid]
+                    save_vault(encrypted_entries, salt, key)
+                    print("Entry deleted.")
+                else:
+                    print("Delete cancelled.")
+                data = None
+                continue
+
+            # Get new values
+            new_site = data['site']
+            new_account = data.get('account') or ''
+            new_password = data.get('password') or ''
+
+            if sub in ["1", "4"]:
+                new_site = input(f"New site [{new_site}]: ").strip()
+                if not new_site:
+                    print("Site name cannot be empty!")
+                    continue
+            if sub in ["2", "4"]:
+                new_account = input(f"New account [{new_account or '(none)'}]: ").strip()
+                # new_account = new_account or ''
+            if sub in ["3", "4"]:
+                new_password = getpass.getpass("New password: ").strip()
+            
+            # Update timestamps
+            now_iso = pendulum.now().to_iso8601_string()
+            data.update({
+                "site": new_site,
+                "account": new_account,
+                "password": new_password,
+                "edited_date": now_iso
+            })
+
+            # Re-encrypt and save
+            new_blob = encrypt(json.dumps(data, separators=(',', ':')), key)
+            encrypted_entries[eid] = new_blob
+            save_vault(encrypted_entries, salt, key)
             data = None
-            if not found and not corrupted:
-                print("Not found")
-            elif not found and corrupted:
-                print("may be corrupted")
+
+            print(f"\nUpdated successfully!")
 
         # ── LIST SITES ─────────────────────────────────────────
-        elif choice == "3":
+        elif choice == "4":
             if not encrypted_entries:
                 print("Empty vault")
                 continue
@@ -211,23 +278,6 @@ def main():
             )
             for eid, (site, account) in sorted_entries:
                 print(f"{eid:>3} → {site:>10} {account}")
-
-        # ── DELETE ─────────────────────────────────────────────
-        elif choice == "4":
-            eid = input("Enter ID to delete: ").strip()
-            if eid in encrypted_entries:
-                # Optional: show what we're deleting
-                try:
-                    plain = decrypt(encrypted_entries[eid], key).decode()
-                    data = json.loads(plain)
-                except:
-                    site = "(unknown)"
-                del encrypted_entries[eid]
-                save_vault(encrypted_entries, salt, key)
-                print(f"Deleted → {data['site'], data['account']}")
-                data = None
-            else:
-                print("ID not found")
 
         # ── CHANGE MASTER PW ───────────────────────────────────────────────
         elif choice == "5":
