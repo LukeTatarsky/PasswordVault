@@ -4,3 +4,4 @@ password_vault*.json
 __pycache__/
 .vscode/
 personal_notes.txt
+test_files/

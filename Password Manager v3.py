@@ -84,19 +84,10 @@ def copy_to_clipboard(text: str, timeout: int = 30) -> None:
     if timeout <= 0:
         return
 
-    # Store original text for comparison
-    original_text = text
-
     def auto_clear():
         time.sleep(timeout)
         try:
-            # Re-import in thread to avoid issues
-            import pyperclip as clippy
-            current = clippy.paste()
-            if current == original_text:
-                pyperclip.copy(40 * "-")
-                time.sleep(0.05)
-                pyperclip.copy("")
+            clear_clipboard_history()
         except Exception:
             # prevent clipboard errors from crashing program
             pass
@@ -105,13 +96,28 @@ def copy_to_clipboard(text: str, timeout: int = 30) -> None:
     threading.Thread(target=auto_clear, daemon=True).start()
     return
 
+def clear_clipboard_history(clipboard_length: int = 80):
+    import pyperclip
+    """
+    Overflows Clipboard History
+    """
+    char_set = string.ascii_letters + string.digits + "!@#$%^&*"
+
+    for i in range(clipboard_length):
+        # Make each entry completely unique and long. Clipboard blocks identical and short entries.
+        fake_data = ''.join(secrets.choice(char_set) for _ in range(40))
+        fake_data = f"[{i:03d}] {fake_data} - {secrets.token_hex(8)}"
+
+        pyperclip.copy(fake_data)
+        
+        # Small delay — defeats throttling
+        time.sleep(0.07)
+
+    # Overwrite with note
+    pyperclip.copy("Clipboard history cleared")
+
 def force_clear_on_exit():
-    try:
-        pyperclip.copy(40 * "-")
-        time.sleep(0.05)
-        pyperclip.copy("")
-    except:
-        pass
+    clear_clipboard_history()
 
 def max_consecutive_chars(pw: str) -> int:
     """
@@ -132,7 +138,7 @@ def max_consecutive_chars(pw: str) -> int:
 
 def get_int(prompt: str, default=None):
     """
-    Ensures user inputs a valid integer.
+    Ensures user inputs a valid integer. Optionally accepts a default value.
     """
     while True:
         val = input(prompt).strip()
@@ -185,6 +191,7 @@ def random_password(length: int = PASS_DEFAULTS["length"],
     # Step 3: Shuffle so required chars aren't clumped at start
     secrets.SystemRandom().shuffle(password)
     pw = ''.join(password)
+
     # Step 4: Ensure no excessive consecutive identical chars, reshuffle if needed
     while max_consecutive_chars(pw) > PASS_DEFAULTS["max_consecutive"]:
         secrets.SystemRandom().shuffle(password)
@@ -201,54 +208,54 @@ def ask_password(prompt: str = "Password:") -> str:
     """
     while True:
         print(f"\n{prompt}:")
-        print("   • Type 'g' → generate strong 20-char password")
-        print("   • Type 'c' → generate customizable random password")
-        print("   • Press Enter to type your own")
+        print("  • Type 'g' → generate strong 20-char password")
+        print("  • Type 'c' → generate customizable random password")
+        print("  • Press Enter to type your own")
         choice = input(" → ").strip().lower()
 
         if choice == "":
             pw = getpass.getpass("Enter password (min length = 8): ").strip()
             if len(pw) < 8:
-                print("   Password too short, try again.")
+                print("  Password too short, try again.")
                 continue
             return pw
 
         elif choice in {"g", "gen", "generate"}:
             pw = random_password(20)
-            print(f"   Generated: {pw} \a")
+            print(f" Generated: \n{pw} \a")
 
-            accept = input("\n   Accept this password? (y/n): ").strip().lower()
+            accept = input("\n  Accept this password? (y/n): ").strip().lower()
             if accept != "y":
                 pw = ''
                 continue
 
-            copy = input("   Copy to clipboard? (y/n): ").strip().lower()
+            copy = input("  Copy to clipboard? (y/n): ").strip().lower()
             if copy == "y":
                 copy_to_clipboard(pw, timeout=60)
 
             return pw
 
         elif choice in {"c", "custom", "customizable"}:
-            pw_len = get_int("\n   Enter desired length (minimum 14, default 20): ")
+            pw_len = get_int("\n  Enter desired length (minimum 14, Enter for default): ", default=PASS_DEFAULTS["length"])
             if pw_len < 14:
-                print("   Length too short, using 20.")
+                print("  Length too short, using 20.")
                 pw_len = 20
-            min_upper = get_int("\n   Minimum upper case: ")
-            min_nums = get_int("\n   Minimum numbers: ")
-            min_symb = get_int("\n   Minimum symbols: ")
+            min_upper = get_int("\n  Minimum upper case (Enter for default): ", default=PASS_DEFAULTS["min_upper"])
+            min_nums = get_int("\n  Minimum numbers (Enter for default): ", default=PASS_DEFAULTS["min_digits"])
+            min_symb = get_int("\n  Minimum symbols (Enter for default): ", default=PASS_DEFAULTS["min_symbols"])
 
             if pw_len < (min_upper + min_nums + min_symb):
-                print("   Requirements exceed length, try again.")
+                print("  Requirements exceed length, try again.")
                 continue
             pw = random_password(pw_len, min_upper, min_nums, min_symb)
-            print(f"\n   Generated: {pw}")
+            print(f"\n Generated: {pw}")
 
-            accept = input("\n   Accept this password? (y/n): ").strip().lower()
+            accept = input("\n Accept this password? (y/n): ").strip().lower()
             if accept != "y":
                 pw = ''
                 continue
 
-            copy = input("   Copy to clipboard? (y/n): ").strip().lower()
+            copy = input(" Copy to clipboard? (y/n): ").strip().lower()
             if copy == "y":
                 copy_to_clipboard(pw, timeout=30)
 
@@ -372,6 +379,9 @@ def search_entries(encrypted_entries: dict, key: bytes):
     for eid, (site, account) in sorted_entries:
         print(f"{eid:>3} → {site:>10} {account}")
 
+    if matches == {}:
+        print(" No matches found.")
+
     # Clear temp
     matches = {}
     sorted_entries = {}
@@ -488,7 +498,7 @@ def main():
 
                 if choice_2 == "c":
                     pw = get_entry_data(encrypted_entries, key, eid).get("password") or ""
-                    copy_to_clipboard(pw, timeout=30)
+                    copy_to_clipboard(pw, timeout=5)
                     pw = None
                     break
 
@@ -503,14 +513,14 @@ def main():
                     break
 
                 else:
-                    print("\rInvalid — press C, S, or Enter           ", end="", flush=True)
+                    print("\rInvalid — press C, S, or Enter \n", end="", flush=True)
                     time.sleep(0.5)
         
         # ── EDIT ENTRY ───────────────────────────────────────
         elif choice == "3":
             eid = input("Enter ID: ").strip().lower()
 
-            res = display_entry(encrypted_entries, key, eid)
+            res = display_entry(encrypted_entries, key, eid, show_password=True)
             if res != 0:
                 continue
 
@@ -551,15 +561,18 @@ def main():
             new_account = data.get('account') or ''
             new_password = data.get('password') or ''
 
+            # Edit Site
             if sub in ["1", "5"]:
                 new_site = input(f"New site [{new_site}]: ").strip()
                 if not new_site:
                     print("Site name cannot be empty!")
                     continue
+            # Edit Account
             if sub in ["2", "5"]:
                 new_account = input(f"New account [{new_account or '(none)'}]: ").strip()
+            # Edit Password
             if sub in ["3", "5"]:
-                new_password = getpass.getpass("New password: ").strip()
+                new_password = ask_password("New password")
             if sub in ["4", "5"]:
                 print("Enter new note (press Enter 3x to finish):")
                 note = ""
@@ -579,6 +592,12 @@ def main():
                 "password": new_password,
                 "edited_date": now_iso
             })
+
+            confirm = input(f"Are you sure you want to update entry for( {data["site"]}-{data["account"]}? ('yes' to confirm): ").strip().lower()
+            if confirm != "yes":
+                data = None
+                print("Update cancelled.")
+                continue
 
             # Re-encrypt and save
             new_blob = encrypt(json.dumps(data, separators=(',', ':')), key)
