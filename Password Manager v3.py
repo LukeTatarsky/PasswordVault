@@ -10,10 +10,12 @@ VAULT_FILE = "password_vault.json"
 ITERATIONS = 1_000_000
 KEY_CHECK_STRING = "MasterKeyValidation"
 DT_FORMAT = "MMM D, YYYY hh:mm:ss A"
+WIPE_CLIPBOARD = True
 
 # Industry standard password defaults
 PASS_DEFAULTS = {
-        "length":          20,
+        "min_length":      0,  # bare minimum
+        "length":          20, # default generated password length
         "min_lower":       4,
         "min_upper":       3,
         "min_digits":      3,
@@ -69,6 +71,28 @@ def display_entry(entries: dict, key: bytes, eid: str, show_password: bool = Fal
     data = None
     return 0
 
+def display_temp_entry(data, show_password: bool = False) -> int:
+    if data == {}:
+        return 1
+
+    print(f"\nSite         : {data['site']}")
+    print(f"Account      : {data.get('account') or ''}")
+    if show_password:
+        print(f"Password     : {data.get('password') or ''}")
+    else:
+        print(f"Password     : {'*' * len(data['password']) if data['password'] else ''}")
+    print(f"Note         :")
+    note = data.get('note', '')
+    if note:
+        print("-" * 40)
+        print(note)
+        note = ''
+        print("-" * 40)
+    print(f"Created      : {pendulum.parse(data['created_date']).format(DT_FORMAT)}")
+    print(f"Last Edited  : {pendulum.parse(data['edited_date']).format(DT_FORMAT)}\n")
+    data = None
+    return 0
+
 def copy_to_clipboard(text: str, timeout: int = 30) -> None:
     """
     Copies text to clipboard and auto-clears after `timeout` seconds
@@ -97,10 +121,14 @@ def copy_to_clipboard(text: str, timeout: int = 30) -> None:
     return
 
 def clear_clipboard_history(clipboard_length: int = 80):
-    import pyperclip
     """
     Overflows Clipboard History
     """
+    import pyperclip
+    
+    if not WIPE_CLIPBOARD:
+        return
+    
     char_set = string.ascii_letters + string.digits + "!@#$%^&*"
 
     for i in range(clipboard_length):
@@ -118,6 +146,124 @@ def clear_clipboard_history(clipboard_length: int = 80):
 
 def force_clear_on_exit():
     clear_clipboard_history()
+
+def get_note_from_user() -> str:
+    """
+    Prompts user to enter a multi-line note, ending with three Enters in a row.
+    """
+    print("Enter note (Enter 3x to end note or 1x to leave empty):")
+    note = ""
+    while True:
+        line = input()
+        if line == "" and note.endswith("\n\n"):  # three enters in a row
+            break
+        elif line == "" and note == "":  # no note
+            break
+        note += line + "\n"
+    return note.strip()
+
+def update_entry(encrypted_entries: dict, key: bytes, salt: bytes, eid: str) -> int:
+    """
+    Entry editor menu.
+    Decrpypts entry, allows user to edit fields, then re-encrypts and saves or discards changes.
+    """
+    if eid not in encrypted_entries:
+        print("ID not found")
+        return 1
+
+    # Load and decrypt the entry
+    try:
+        data = json.loads(decrypt(encrypted_entries[eid], key).decode())
+    except Exception:
+        print("Entry corrupted — cannot edit")
+        return 1
+
+    display_entry(encrypted_entries, key, eid, show_password=False)
+
+    while True:
+        print("\nWhat would you like to do?")
+        print("   1. Edit Site")
+        print("   2. Edit Account")
+        print("   3. Edit Password")
+        print("   4. Edit Note")
+        print()
+        print("   5. Display Entry")
+        print("   6. Save & Exit")
+        print("   7. Delete Entry")
+        print("   8. Cancel (no changes)")
+        choice = input("\n → ").strip()
+
+        if choice == "1":
+            new_site = input(f"New site [{data.get('site', '')}]: ").strip()
+            if new_site and new_site != data.get('site'):
+                data["site"] = new_site
+                print("   Site updated")
+            else:
+                print("   Site unchanged")
+
+        elif choice == "2":
+            new_acc = input(f"New account [{data.get('account') or ''}]: ").strip()
+            data["account"] = new_acc
+            print("   Account updated")
+
+        elif choice == "3":
+            new_pw = ask_password("New password")
+            data["password"] = new_pw
+            print("   Password updated")
+
+        elif choice == "4":
+            print ("\nCurrent note:")
+            print("-" * 40)
+            print(data.get("note", "")) 
+            print("-" * 40)
+            note = get_note_from_user()
+            data["note"] = note
+            print("   Note updated")
+
+        elif choice == "5":
+            display_temp_entry(data, show_password=True)
+
+        elif choice == "6":
+            if data.get("site", "").strip() == "":
+                print("   Error: Site cannot be empty!")
+                continue
+
+            confirm = input(f"\nSave changes to {data['site']}? (type 's' to confirm): ")
+            if confirm.strip().lower() != "s":
+                print("   Save cancelled")
+                continue
+
+            # Update timestamp
+            data["edited_date"] = pendulum.now().to_iso8601_string()
+
+            # Re-encrypt and save
+            blob = encrypt(json.dumps(data, separators=(',', ':')), key)
+            encrypted_entries[eid] = blob
+            save_vault(encrypted_entries, salt, key)
+
+            print("\nEntry updated and saved successfully!")
+            data = None
+            return 0
+
+        elif choice == "7":
+            confirm = input(f"\nDelete this entry permanently? (type 'del' to confirm): ")
+            if confirm.strip().lower() == "del":
+                del encrypted_entries[eid]
+                save_vault(encrypted_entries, salt, key)
+                print("Entry deleted.")
+                data = None
+                return 0
+            else:
+                print("   Delete cancelled")
+            
+        elif choice == "8":
+            print("All changes discarded.")
+            data = None
+            return 0
+
+        else:
+            print("   Invalid option — choose 1–8")
+
 
 def max_consecutive_chars(pw: str) -> int:
     """
@@ -214,8 +360,8 @@ def ask_password(prompt: str = "Password:") -> str:
         choice = input(" → ").strip().lower()
 
         if choice == "":
-            pw = getpass.getpass("Enter password (min length = 8): ").strip()
-            if len(pw) < 8:
+            pw = getpass.getpass(f"Enter password (min length = {PASS_DEFAULTS['min_length']}): ").strip()
+            if len(pw) < PASS_DEFAULTS["min_length"]:
                 print("  Password too short, try again.")
                 continue
             return pw
@@ -240,9 +386,9 @@ def ask_password(prompt: str = "Password:") -> str:
             if pw_len < 14:
                 print("  Length too short, using 20.")
                 pw_len = 20
-            min_upper = get_int("\n  Minimum upper case (Enter for default): ", default=PASS_DEFAULTS["min_upper"])
-            min_nums = get_int("\n  Minimum numbers (Enter for default): ", default=PASS_DEFAULTS["min_digits"])
-            min_symb = get_int("\n  Minimum symbols (Enter for default): ", default=PASS_DEFAULTS["min_symbols"])
+            min_upper = get_int("  Minimum upper case (Enter for default): ", default=PASS_DEFAULTS["min_upper"])
+            min_nums = get_int("  Minimum numbers (Enter for default): ", default=PASS_DEFAULTS["min_digits"])
+            min_symb = get_int("  Minimum symbols (Enter for default): ", default=PASS_DEFAULTS["min_symbols"])
 
             if pw_len < (min_upper + min_nums + min_symb):
                 print("  Requirements exceed length, try again.")
@@ -297,7 +443,7 @@ def load_vault(master_pw: str):
                 print("Wrong master password!")
                 exit()
         except:
-            print("Wrong master password!")
+            print("Wrong master password! or corrupted vault!")
             exit()
 
     encrypted_entries = vault.get("entries", {})
@@ -321,6 +467,8 @@ def list_entries(encrypted_entries: dict, key: bytes):
         print("Empty vault")
         return
     print("\nYour entries:")
+    print (f"{'ID':>8} → {'Site':>10} Account")
+    print("-" * 30)
     entries = {}
 
     for eid, blob in encrypted_entries.items():
@@ -354,6 +502,8 @@ def search_entries(encrypted_entries: dict, key: bytes):
         return
     
     print("\nYour entries:")
+    print (f"{'ID':>8} → {'Site':>10} Account")
+    print("-" * 30)
     matches = {}
 
     for eid, blob in encrypted_entries.items():
@@ -447,16 +597,9 @@ def main():
                 continue
             account = input("Account: ").strip()
 
-            password = ask_password("New password")
+            note = get_note_from_user()
 
-            print("Enter note (press Enter 3x to finish):")
-            note = ""
-            while True:
-                line = input()
-                if line == "" and note.endswith("\n\n"):  # two enters in a row
-                    break
-                note += line + "\n"
-            note = note.strip()
+            password = ask_password("New password")
 
             created_date = pendulum.now().to_iso8601_string()
 
@@ -484,7 +627,6 @@ def main():
             if res != 0:
                 continue
 
-            # ── PRESS C TO COPY ──
             password_shown = False
 
             while True:
@@ -498,7 +640,7 @@ def main():
 
                 if choice_2 == "c":
                     pw = get_entry_data(encrypted_entries, key, eid).get("password") or ""
-                    copy_to_clipboard(pw, timeout=5)
+                    copy_to_clipboard(pw, timeout=30)
                     pw = None
                     break
 
@@ -520,92 +662,7 @@ def main():
         elif choice == "3":
             eid = input("Enter ID: ").strip().lower()
 
-            res = display_entry(encrypted_entries, key, eid, show_password=True)
-            if res != 0:
-                continue
-
-            # Ask what to edit
-            print("What do you want to update?")
-            print("  1. Site")
-            print("  2. Account")
-            print("  3. Password")
-            print("  4. Note")
-            print("  5. Everything")
-            print("  6. Delete")
-            print("  7. Cancel")
-            sub = input("> ").strip()
-
-            if sub == "7":
-                print("Edit cancelled.")
-                continue
-            if sub not in ["1", "2", "3", "4", "5", "6"]:
-                print("Invalid choice.")
-                continue
-
-            data =  get_entry_data(encrypted_entries, key, eid)
-
-            # Delete entry
-            if sub == "6":
-                confirm = input(f"Are you sure you want to delete entry '{data['site']}'? (y/N): ").strip().lower()
-                if confirm == "y":
-                    del encrypted_entries[eid]
-                    save_vault(encrypted_entries, salt, key)
-                    print("Entry deleted.")
-                else:
-                    print("Delete cancelled.")
-                data = None
-                continue
-
-            # Get new values
-            new_site = data['site']
-            new_account = data.get('account') or ''
-            new_password = data.get('password') or ''
-
-            # Edit Site
-            if sub in ["1", "5"]:
-                new_site = input(f"New site [{new_site}]: ").strip()
-                if not new_site:
-                    print("Site name cannot be empty!")
-                    continue
-            # Edit Account
-            if sub in ["2", "5"]:
-                new_account = input(f"New account [{new_account or '(none)'}]: ").strip()
-            # Edit Password
-            if sub in ["3", "5"]:
-                new_password = ask_password("New password")
-            if sub in ["4", "5"]:
-                print("Enter new note (press Enter 3x to finish):")
-                note = ""
-                while True:
-                    line = input()
-                    if line == "" and note.endswith("\n\n"):  # three enters in a row
-                        break
-                    note += line + "\n"
-                note = note.strip()
-                data['note'] = note
-            
-            # Update timestamps
-            now_iso = pendulum.now().to_iso8601_string()
-            data.update({
-                "site": new_site,
-                "account": new_account,
-                "password": new_password,
-                "edited_date": now_iso
-            })
-
-            confirm = input(f"Are you sure you want to update entry for( {data["site"]}-{data["account"]}? ('yes' to confirm): ").strip().lower()
-            if confirm != "yes":
-                data = None
-                print("Update cancelled.")
-                continue
-
-            # Re-encrypt and save
-            new_blob = encrypt(json.dumps(data, separators=(',', ':')), key)
-            encrypted_entries[eid] = new_blob
-            save_vault(encrypted_entries, salt, key)
-            data = None
-
-            print(f"\nUpdated successfully!")
+            update_entry(encrypted_entries, key, salt, eid)
 
         # ── LIST SITES ─────────────────────────────────────────
         elif choice == "4":
@@ -621,9 +678,8 @@ def main():
 
         # ── QUIT ───────────────────────────────────────────────
         elif choice == "7":
-            pyperclip.copy("")
             print("Goodbye!")
-            break
+            exit()
 
 if __name__ == "__main__":
     try:

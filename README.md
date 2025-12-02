@@ -25,3 +25,4 @@ git clone https://github.com/yourname/MyVault.git
 cd MyVault
 pip install -r requirements.txt
 python MyVault.py
+```
