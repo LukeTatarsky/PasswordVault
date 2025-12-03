@@ -1,171 +1,372 @@
-# MyVault Password Manager v3
-# Local password manager with strong encryption and random password generation.
-import os, json, getpass, base64, uuid, pendulum, time, threading, pyperclip, atexit
-import string, secrets, re
-from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+"""
+MyVault Password Manager v4
+Local password manager with strong encryption and random password generation.
+"""
+# ──────────────────────────────────────────────────────────────
+# Standard imports
+# ──────────────────────────────────────────────────────────────
+import os
+import sys
+import json
+import uuid
+import time
+import atexit
+import getpass
+import threading
+import secrets
+import string
+import re
+import base64
+from typing import Dict, Any,Tuple
 
-VAULT_FILE = "password_vault.json"
-ITERATIONS = 1_000_000
-KEY_CHECK_STRING = "MasterKeyValidation"
-DT_FORMAT = "MMM D, YYYY hh:mm:ss A"
-WIPE_CLIPBOARD = True
-
-# Industry standard password defaults
-PASS_DEFAULTS = {
-        "min_length":      0,  # bare minimum
-        "length":          20, # default generated password length
-        "min_lower":       4,
-        "min_upper":       3,
-        "min_digits":      3,
-        "min_symbols":     3,
-        "avoid_ambiguous": True,
-        "max_consecutive": 1,   # no more than x same chars in a row
-        "ambiguous_chars": "lI1O08",
-        "symbols_pool":   "!@#()[]|?$%^*_-+.,=",
-        "bank_safe_symbols":   "!@#$%^*_-+=",
-    }
+# ──────────────────────────────────────────────────────────────
+# Third-party imports
+# ──────────────────────────────────────────────────────────────
+try:
+    import pyperclip
+    import pendulum
+    from config import *
+    from cryptography.fernet import Fernet, InvalidToken
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+except ImportError as e:
+    missing_package = e.name if hasattr(e, "name") else "unknown package"
+    print("Missing required dependency!")
+    print(f"  {missing_package} is not installed")
+    print("\nInstall with:")
+    print("  pip install -r requirements.txt")
+    sys.exit(1)
 
 def derive_key(pw: str, salt: bytes) -> bytes:
+    """
+    -------------------------------------------------------
+    Derives a 32-byte key from a password and salt
+    using PBKDF2-HMAC-SHA256 and a fixed number of iterations. 
+    The key is encoded as a URL-safe base64 string 
+    suitable for direct use with Fernet.
+    Use: key = derive_key(password, salt)
+    -------------------------------------------------------
+    Parameters:
+        pw   - the user password or passphrase (str)
+        salt - cryptographically random salt, unique per key (bytes)
+    Returns:
+        bytes - URL-safe base64-encoded 32-byte key
+    -------------------------------------------------------
+    """
     kdf = PBKDF2HMAC(hashes.SHA256(), 32, salt, ITERATIONS)
     return base64.urlsafe_b64encode(kdf.derive(pw.encode()))
 
 def encrypt(text: str, key: bytes) -> str:
+    """
+    -------------------------------------------------------
+    Encrypts a plaintext string using Fernet symmetric encryption
+    and returns the encrypted token as a string.
+    Use: token = encrypt("secret message", fernet_key)
+    -------------------------------------------------------
+    Parameters:
+        text - the plaintext message to encrypt (str)
+        key  - a valid Fernet key (bytes)
+    Returns:
+        str  - URL-safe base64 Fernet token
+    -------------------------------------------------------
+    """
     return Fernet(key).encrypt(text.encode()).decode()
 
-def decrypt(token: str, key: bytes) -> bytes:
-    return Fernet(key).decrypt(token.encode())
+def decrypt(token: str, key: bytes) -> str:
+    """
+    -------------------------------------------------------
+    Decrypts a Fernet token back into the original 
+    plaintext bytes using the supplied symmetric key.
+    By default tokens never expire, use ttl to check.
+    Use: data = decrypt(token, fernet_key)
+    -------------------------------------------------------
+    Parameters:
+        token - encrypted Fernet token produced by encrypt() (str)
+        key   - the same Fernet key used for encryption (bytes)
+    Returns:
+        str   - decrypted plaintext
+    -------------------------------------------------------
+    Raises:
+        cryptography.fernet.InvalidToken - if token is invalid,
+               tampered with, or the key is incorrect
+    -------------------------------------------------------
+    """
+    return Fernet(key).decrypt(token.encode()).decode()
 
-def get_entry_data(entries: dict, key: bytes, eid: str):
-    data = {}
+def get_entry_data(entries: dict[str, str], key: bytes, eid: str) -> dict[str, object]:
+    """
+    -------------------------------------------------------
+    Retrieves and decrypts a single entry from a dictionary
+    of encrypted entries. The entry value is expected to be a Fernet
+    token. 
+    The decrypted JSON string is parsed and returned as a dictionary.
+    Use: entry = get_entry_data(password_db, fernet_key, "user123")
+    -------------------------------------------------------
+    Parameters:
+        entries - dictionary mapping entry IDs to encrypted tokens
+                  e.g. {"user123": "gAAAAAB..."} (Dict[str, str])
+        key     - Fernet symmetric key used for decryption (bytes)
+        eid     - entry ID (dict key) to look up and decrypt (token str)
+    Returns:
+        Dict[str, Any] - decrypted and parsed entry data
+                         returns empty dict {} on error or if not found
+    -------------------------------------------------------
+    Side effects:
+        Prints user-friendly messages on KeyError (not found) or
+        decryption/parsing failure (corrupted/invalid).
+    -------------------------------------------------------
+    """
+    data: Dict[str, Any] = {}
     try:
-        data = json.loads(decrypt(entries[eid], key).decode()) 
+        encrypted_token: str = entries[eid]
+        data = json.loads(decrypt(encrypted_token, key))
     except KeyError:
         print("Not found.")
-    except:
+    except (InvalidToken, json.JSONDecodeError, UnicodeDecodeError):
         print("Entry may be corrupted, cannot view.")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+    return data
 
-    return data 
-    
-def display_entry(entries: dict, key: bytes, eid: str, show_password: bool = False) -> int:
-    data = get_entry_data(entries, key, eid)
-    if data == {}:
-        return 1
-
-    print(f"Site         : {data['site']}")
-    print(f"Account      : {data.get('account') or ''}")
-    if show_password:
-        print(f"Password     : {data.get('password') or ''}")
-    else:
-        print(f"Password     : {'*' * len(data['password']) if data['password'] else ''}")
-    print(f"Note         :")
-    note = data.get('note', '')
-    if note:
-        print("-" * 40)
-        print(note)
-        note = ''
-        print("-" * 40)
-    print(f"Created      : {pendulum.parse(data['created_date']).format(DT_FORMAT)}")
-    print(f"Last Edited  : {pendulum.parse(data['edited_date']).format(DT_FORMAT)}\n")
-    data = None
-    return 0
-
-def display_temp_entry(data, show_password: bool = False) -> int:
-    if data == {}:
-        return 1
-
-    print(f"\nSite         : {data['site']}")
-    print(f"Account      : {data.get('account') or ''}")
-    if show_password:
-        print(f"Password     : {data.get('password') or ''}")
-    else:
-        print(f"Password     : {'*' * len(data['password']) if data['password'] else ''}")
-    print(f"Note         :")
-    note = data.get('note', '')
-    if note:
-        print("-" * 40)
-        print(note)
-        note = ''
-        print("-" * 40)
-    print(f"Created      : {pendulum.parse(data['created_date']).format(DT_FORMAT)}")
-    print(f"Last Edited  : {pendulum.parse(data['edited_date']).format(DT_FORMAT)}\n")
-    data = None
-    return 0
-
-def copy_to_clipboard(text: str, timeout: int = 30) -> None:
+def load_vault(master_pw: str) -> Tuple[bytes, Dict[str, str], bytes]:
     """
-    Copies text to clipboard and auto-clears after `timeout` seconds
-    if the clipboard still contains the original text.
+    -------------------------------------------------------
+    Loads or creates the encrypted password vault file.
+    On first run: creates a new vault with a random salt and a
+    canary value to verify the master password later.
+    On subsequent runs: loads the vault, derives the key from the
+    master password + stored salt, and verifies the password using
+    the encrypted canary. Exits the program on wrong password.
+    Use: key, entries, salt = load_vault("mymasterpassword")
+    -------------------------------------------------------
+    Parameters:
+        master_pw - the master password (str)
+    Returns:
+        Tuple[bytes, Dict[str, str], bytes]
+            - derived Fernet key (bytes)
+            - dictionary of encrypted entries {eid(str): token(str)}
+            - salt used for key derivation (bytes)
+    -------------------------------------------------------
+    Side effects:
+        Creates vault file if it doesn't exist.
+        Prints status messages.
+    -------------------------------------------------------
     """
-    if not text:
-        return
+    # =========================================================
+    # 1. Create new vault if none exists
+    # =========================================================
+    if not os.path.exists(VAULT_FILE):
+        print("Creating new password vault...")
+        salt = os.urandom(16)
+        key = derive_key(master_pw, salt)
 
-    # Copy to clipboard
-    pyperclip.copy(text)
-    print(f"Password copied! (auto-clears in {timeout}s)", flush=True)
+        vault = {
+            "salt": base64.urlsafe_b64encode(salt).decode(),
+            "canary": encrypt(KEY_CHECK_STRING, key),
+            "entries": {}
+        }
+        with open(VAULT_FILE, "w", encoding="utf-8") as f:
+            json.dump(vault, f, indent=2)
 
-    if timeout <= 0:
-        return
+        return key, {}, salt
 
-    def auto_clear():
-        time.sleep(timeout)
-        try:
-            clear_clipboard_history()
-        except Exception:
-            # prevent clipboard errors from crashing program
-            pass
+    # =========================================================
+    # 2. Load existing vault
+    # =========================================================
+    with open(VAULT_FILE, encoding="utf-8") as f:
+        vault: Dict[str, Any] = json.load(f)
 
-    # Starts a new thread to clear clipboard. Dies when main program exits
-    threading.Thread(target=auto_clear, daemon=True).start()
+    # Extract and decode stored salt
+    try:
+        salt = base64.urlsafe_b64decode(vault["salt"])
+    except (KeyError, base64.binascii.Error):
+        print("Vault is corrupted: missing or invalid salt!")
+        sys.exit(1)
+
+    # Derive key from user password + stored salt
+    key = derive_key(master_pw, salt)
+
+    # =========================================================
+    # 3. Verify master password using the canary
+    # =========================================================
+    if "canary" not in vault:
+        print("Vault corrupted: missing canary!")
+        sys.exit(1)
+
+    try:
+        decrypted_canary = decrypt(vault["canary"], key)
+        if decrypted_canary != KEY_CHECK_STRING:
+            print("Wrong master password!")
+            sys.exit(1)
+    except InvalidToken:
+        print("Wrong master password or vault is corrupted!")
+        sys.exit(1)
+
+    # =========================================================
+    # 4. Return decrypted entries container
+    # =========================================================
+    encrypted_entries: Dict[str, str] = vault.get("entries", {})
+
+    print("Vault unlocked successfully.")
+    return key, encrypted_entries, salt
+
+def save_vault(encrypted_entries: dict[str, str], salt: bytes, key: bytes) -> None:
+    """
+    -------------------------------------------------------
+    Securely saves the encrypted password vault to disk using
+    atomic write which guarantees data integrity.
+    Safe from program crashes, power fails, etc..  mid-save.
+    This ensures the vault file is either 100% old or 100% new.
+
+    The canary is re-encrypted on every save to match the 
+    current master password + salt.
+    Use: save_vault(encrypted_db, current_salt, fernet_key)
+    -------------------------------------------------------
+    Parameters:
+        encrypted_entries - dict mapping entry IDs to encrypted tokens
+                            e.g. {"user123": "gAAAAAB..."} (dict[str, str])
+        salt              - current salt used for key derivation (bytes)
+        key               - current derived Fernet key (bytes)
+    Returns:
+        None
+    -------------------------------------------------------
+    Side effects:
+        Overwrites VAULT_FILE atomically with new vault data.
+    -------------------------------------------------------
+    """
+    vault = {
+        "salt": base64.urlsafe_b64encode(salt).decode("ascii"),
+        "canary": encrypt(KEY_CHECK_STRING, key),
+        "entries": encrypted_entries
+    }
+
+    # Write to temporary file first.
+    tmp = VAULT_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(vault, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno()) # force to disk
+
+    # Atomic replace the VAULT FILE. Then clear tmp.
+    os.replace(tmp, VAULT_FILE)
     return
 
-def clear_clipboard_history(clipboard_length: int = 80):
+def display_entry(source: Dict[str, Any], key: bytes | None = None,
+    eid: str | None = None,  *, show_pass: bool = False,) -> int: 
+    # note: * enforces that everything afterwards is called by name (no positional)
     """
-    Overflows Clipboard History
+    -------------------------------------------------------
+    Displays a single entry in a human-readable format.
+    Supports optional password masking. Used for command line output.
+
+    1) When viewing from vault: pass encrypted_entries + key + eid
+    2) When editing (in-memory): pass decrypted dict + key=None + eid=None
+
+    Use:
+        Mode 1)
+        display_entry(encrypted_entries, key, "github")         # from vault
+
+        Mode 2)
+        display_entry(current_data)                             # while editing
+        display_entry(current_data, show_pass=True)             # reveal pw
+    -------------------------------------------------------
+    Parameters:
+        source        - either:  (dict[str, Any])
+                          • encrypted_entries dict {eid: token} when viewing from vault
+                          • decrypted entry dict when editing/previewing
+        key           - Fernet key for decryption (bytes)
+                         Omit when source is already decrypted
+        eid           - entry ID to look up (str)
+                         Omit when source is already decrypted
+        show_pass - if True, reveals plaintext password
+                        if False (default), masks with asterisks (bool)
+
+    Returns:
+        int - 0 on success
+              1 if entry not found, corrupted, or invalid
+    -------------------------------------------------------
     """
-    import pyperclip
-    
-    if not WIPE_CLIPBOARD:
-        return
-    
-    char_set = string.ascii_letters + string.digits + "!@#$%^&*"
 
-    for i in range(clipboard_length):
-        # Make each entry completely unique and long. Clipboard blocks identical and short entries.
-        fake_data = ''.join(secrets.choice(char_set) for _ in range(40))
-        fake_data = f"[{i:03d}] {fake_data} - {secrets.token_hex(8)}"
+    # =========================================================
+    # 1. Decide on input type
+    # =========================================================
+    if eid is not None and key is not None:
+        # Mode 1: Display from encrypted vault
+        data = get_entry_data(source, key, eid)
+        if not data:
+            return 1
+    else:
+        # Mode 2: Display already-decrypted in-memory dict
+        data = source
+        if not data:
+            return 1
 
-        pyperclip.copy(fake_data)
-        
-        # Small delay — defeats throttling
-        time.sleep(0.07)
+    print(f"\nSite         : {data.get('site', '(missing)')}")
+    print(f"Account      : {data.get('account') or ''}")
 
-    # Overwrite with note
-    pyperclip.copy("Clipboard history cleared")
+    password = data.get('password', '')
+    if show_pass:
+        print(f"Password     : {password or ''}")
+    else:
+        masked = '*' * len(password) if password else ''
+        print(f"Password     : {masked}")
 
-def force_clear_on_exit():
-    clear_clipboard_history()
+    print("Note         :")
+    note = data.get('note', '').strip()
+    if note:
+        print("-" * 40)
+        print(note)
+        print("-" * 40)
 
-def get_note_from_user() -> str:
+    created = pendulum.parse(data.get('created_date', '1970-01-01T00:00:00Z'))
+    edited = pendulum.parse(data.get('edited_date', '1970-01-01T00:00:00Z'))
+
+    print(f"Created      : {created.in_timezone('local').format(DT_FORMAT)}")
+    print(f"Last Edited  : {edited.in_timezone('local').format(DT_FORMAT)}\n")
+
+    return 0
+
+def update_entry(encrypted_entries: dict[str, str], key: bytes, salt: bytes, eid: str) -> int:
     """
-    Prompts user to enter a multi-line note, ending with three Enters in a row.
-    """
-    print("Enter note (Enter 3x to end note or 1x to leave empty):")
-    note = ""
-    while True:
-        line = input()
-        if line == "" and note.endswith("\n\n"):  # three enters in a row
-            break
-        elif line == "" and note == "":  # no note
-            break
-        note += line + "\n"
-    return note.strip()
+    -------------------------------------------------------
+    Interactive command line entry editor.
 
-def update_entry(encrypted_entries: dict, key: bytes, salt: bytes, eid: str) -> int:
-    """
-    Entry editor menu.
-    Decrpypts entry, allows user to edit fields, then re-encrypts and saves or discards changes.
+    Loads and decrypts the specified entry, then presents a full-featured
+    menu allowing the user to:
+      • Edit site, account, password, or note
+      • View current entry
+      • Save changes with updated timestamp
+      • Delete the entry permanently
+      • Cancel and discard any changes
+
+    Changes are written to disk only if the user explicitly confirms 
+    with 's' (save) or 'del' (delete).
+
+    Use:
+        update_entry(vault_entries, fernet_key, current_salt, "github")
+    -------------------------------------------------------
+    Parameters:
+        encrypted_entries - current in-memory dict of encrypted entries
+                            {entry_id: fernet_token} (dict[str, str])
+        key               - active Fernet key for decryption/encryption (bytes)
+        salt              - current vault salt (used only for saving) (bytes)
+        eid               - entry ID to edit (must exist in vault) (str)
+
+    Returns:
+        int - 0 on success (saved, deleted, or cancelled)
+              1 if entry not found or corrupted
+    -------------------------------------------------------
+    Menu options:
+        1. Edit Site          5. Display Entry (incl pass)
+        2. Edit Account       6. Save & Exit
+        3. Edit Password      7. Delete Entry
+        4. Edit Note          8. Cancel (discard changes)
+    -------------------------------------------------------
+    Security features:
+        • Requires explicit confirmation ('s' or 'del')
+        • Site cannot be empty
+        • Timestamp automatically updated on save
+    -------------------------------------------------------
     """
     if eid not in encrypted_entries:
         print("ID not found")
@@ -173,37 +374,38 @@ def update_entry(encrypted_entries: dict, key: bytes, salt: bytes, eid: str) -> 
 
     # Load and decrypt the entry
     try:
-        data = json.loads(decrypt(encrypted_entries[eid], key).decode())
+        data = json.loads(decrypt(encrypted_entries[eid], key))
+    except InvalidToken:
+            res = delete_corrupted_entry(encrypted_entries, salt, key, eid)
+            return res
     except Exception:
         print("Entry corrupted — cannot edit")
         return 1
 
-    display_entry(encrypted_entries, key, eid, show_password=False)
+    display_entry(encrypted_entries, key, eid, show_pass=False)
 
     while True:
         print("\nWhat would you like to do?")
-        print("   1. Edit Site")
-        print("   2. Edit Account")
-        print("   3. Edit Password")
-        print("   4. Edit Note")
-        print()
-        print("   5. Display Entry")
-        print("   6. Save & Exit")
-        print("   7. Delete Entry")
-        print("   8. Cancel (no changes)")
+        print("   1. Edit Site          5. Display Entry (incl pass)")
+        print("   2. Edit Account       6. Save & Exit")
+        print("   3. Edit Password      7. Delete Entry")
+        print("   4. Edit Note          8. Cancel (discard changes)")
+        
         choice = input("\n → ").strip()
 
         if choice == "1":
-            new_site = input(f"New site [{data.get('site', '')}]: ").strip()
-            if new_site and new_site != data.get('site'):
+            current = data.get('site', '')
+            new_site = input(f"New site [{current}]: ").strip()
+            if new_site and new_site != current:
                 data["site"] = new_site
                 print("   Site updated")
             else:
                 print("   Site unchanged")
 
         elif choice == "2":
-            new_acc = input(f"New account [{data.get('account') or ''}]: ").strip()
-            data["account"] = new_acc
+            current = data.get('account') or ''
+            new_acc = input(f"New account [{current}]: ").strip()
+            data["account"] = new_acc or ''
             print("   Account updated")
 
         elif choice == "3":
@@ -221,14 +423,14 @@ def update_entry(encrypted_entries: dict, key: bytes, salt: bytes, eid: str) -> 
             print("   Note updated")
 
         elif choice == "5":
-            display_temp_entry(data, show_password=True)
+            display_entry(data, show_pass=True)
 
         elif choice == "6":
             if data.get("site", "").strip() == "":
                 print("   Error: Site cannot be empty!")
                 continue
 
-            confirm = input(f"\nSave changes to {data['site']}? (type 's' to confirm): ")
+            confirm = input(f"\nSave changes to {data.get("site", "")}? (type 's' to confirm): ")
             if confirm.strip().lower() != "s":
                 print("   Save cancelled")
                 continue
@@ -240,7 +442,6 @@ def update_entry(encrypted_entries: dict, key: bytes, salt: bytes, eid: str) -> 
             blob = encrypt(json.dumps(data, separators=(',', ':')), key)
             encrypted_entries[eid] = blob
             save_vault(encrypted_entries, salt, key)
-
             print("\nEntry updated and saved successfully!")
             data = None
             return 0
@@ -264,10 +465,237 @@ def update_entry(encrypted_entries: dict, key: bytes, salt: bytes, eid: str) -> 
         else:
             print("   Invalid option — choose 1–8")
 
+def list_entries(encrypted_entries: dict[str, str], key: bytes,
+                  query: str = None) -> None:
+    """
+    -------------------------------------------------------
+    Lists all vault entries — with optional search filtering.
+
+    Decrypts each entry and displays site and account. 
+    Undecryptable entries are marked as corrupted.
+
+    Entries are sorted alphabetically by site, then by account.
+
+    Use:
+        list_entries(encrypted_entries, key)
+        list_entries(encrypted_entries, key, query="github")
+    -------------------------------------------------------
+    Parameters:
+        encrypted_entries - dict of encrypted entries {eid: token}
+                            (dict[str, str])
+        key               - Fernet key
+        search            - optional search term (case-insensitive)
+                            • None  = list all
+                            • str   = filter results
+
+    Returns:
+        None
+    -------------------------------------------------------
+    Output example:
+        Your entries:
+                ID →              Site Account
+            ----------------------------------------
+            73173e6c →     [corrupted]
+            b074ec2e →          github 23
+            e48179d8 →           gmail user41
+    -------------------------------------------------------
+    Features:
+        • Full-text search across site, account, and note
+        • Passwords never shown
+        • Corrupted entries handled gracefully
+        • Sorted alphabetically by site → accountg
+        • Memory-safe — temporary decrypted data cleared
+    -------------------------------------------------------
+    """
+    if not encrypted_entries:
+        print("Empty vault — no entries yet.")
+        return
+    
+    # Temporary dict: eid → (site, account)
+    display_data: dict[str, tuple[str, str]] = {}
+
+    for eid, blob in encrypted_entries.items():
+        try:
+            data = json.loads(decrypt(blob, key))
+            site = data.get("site", "(no site)")
+            account = data.get("account", "")
+            note = data.get("note", "")
+
+            # Build searchable text
+            searchable_str = " ".join([site, account, note]).lower()
+
+            # Filter if searching
+            if query and query not in searchable_str:
+                continue
+
+            display_data[eid] = (site, account)
+
+        except Exception:
+            # only show corrupted if not searching
+            if not query:
+                display_data[eid] = ("corrupted", "")
+
+    if not display_data:
+        print("  No entries found." + (" (try different term)" if query else ""))
+        return
+    
+    # Sort by site , then account
+    sorted_entries = sorted(
+        display_data.items(),
+        key=lambda entry: (entry[1][0].lower(), entry[1][1].lower() or "")
+    )
+
+    print("\nYour entries:")
+    print (f"{'ID':>8} → {'Site':>15}  Account")
+    print("-" * 40)
+
+    for eid, (site, account) in sorted_entries:
+        print(f"{eid:>3} → {site:>15}  {account}")
+
+    # Clear temp
+    data = None
+    display_data = {}
+    sorted_entries = {}
+    return
+
+def change_master_password() -> None:
+    """
+    -------------------------------------------------------
+    Changes the master password of the vault.
+
+    This function performs a complete master password rotation:
+      • Verifies the current password
+      • Generates a new random salt
+      • Derives a new encryption key from the new password
+      • Decrypts each entry with the old key
+      • If any entry fails to decrypt → operation aborts immediately
+      • Re-encrypts each entry with the new key
+      • Atomically saves the new vault with updated salt and canary
+
+    All old encrypted data becomes permanently unreadable after this.
+    There is no "undo" — this is by design for forward secrecy.
+
+    Use:
+        main menu → "Change master password"
+    -------------------------------------------------------
+    Security:
+        • Old password is verified before any changes
+        • New salt is generated
+        • Every entry is fully re-encrypted
+        • Atomic save via save_vault()
+        • Empty passwords rejected
+        
+    -------------------------------------------------------
+    Returns:
+        None
+    -------------------------------------------------------
+    """
+    print("\n=== Change Master Password ===")
+
+    old_pw = getpass.getpass("Current master password: ").strip()
+    new_pw = getpass.getpass("New master password: ").strip()
+    confirm = getpass.getpass("Confirm new master password: ").strip()
+
+    if new_pw != confirm:
+        print("New passwords do not match!")
+        return
+    if not new_pw:
+        print("Master password cannot be empty!")
+        return
+
+    # 1. Try to load with the old password (this also verifies it)
+    try:
+        temp_key, temp_entries, _ = load_vault(old_pw)
+    except SystemExit:
+        print("Wrong current password!")
+        return
+
+    print("Current password verified. Re-encrypting all entries...")
+
+    # 2. Derive a new salt and key from the new password
+    new_salt = os.urandom(16)
+    new_key = derive_key(new_pw, new_salt)
+
+    # 3. Decrypt and re-encrypt every entry with the new key
+    new_encrypted_entries: Dict[str, str] = {}
+    for eid, old_blob in temp_entries.items():
+        try:
+            # Decrypt with old key
+            plaintext = decrypt(old_blob, temp_key)
+            # Encrypt again with new key
+            new_blob = encrypt(plaintext, new_key)
+            new_encrypted_entries[eid] = new_blob
+        except InvalidToken:
+            print(f"\nFailed to decrypt entry {eid}")
+            print("Aborting password change.")
+            return
+        except Exception as e:
+            print(f"\nFailed to re-encrypt entry {eid}: {e}")
+            print("Aborting password change.")
+            return
+
+    # 4. Save with the new salt and new encrypted blobs
+    save_vault(new_encrypted_entries, new_salt, new_key)
+    print("Master password changed successfully!")
+    return
+
+def delete_corrupted_entry(encrypted_entries: dict[str, str],
+    salt: bytes, key: bytes, eid: str) -> int:
+    """
+    -------------------------------------------------------
+    Helper function to remove a single corrupted entry.
+
+    Used when an entry cannot be decrypted (e.g. damaged file, wrong key,
+    or encryption corruption) it blocks operations like master pw change. 
+
+    Use:
+        Called when user tries to edit/view a corrupted entry.
+    -------------------------------------------------------
+    Parameters:
+        encrypted_entries - current in-memory encrypted vault (dict[str, str])
+        salt              - current vault salt (bytes)
+        key               - current Fernet decryption key (bytes)
+        eid               - ID of the corrupted entry to delete (str)
+
+    Returns:
+        int - 0 → entry successfully deleted
+              1 → user cancelled or entry not present
+
+    -------------------------------------------------------
+    Security:
+        • Does NOT rotate salt or key
+        • Atomic save via save_vault() — crash-safe
+        • Confirmation prevents accidental deletion
+    """
+    print(f"\nEntry '{eid}' appears to be corrupted.")
+    print("It cannot be viewed or edited.")
+    confirm = input("\nDelete this entry permanently? (type 'del' to confirm): ")
+    if confirm.strip().lower() == "del":
+        encrypted_entries.pop(eid, None)
+        save_vault(encrypted_entries, salt, key)
+        print("Corrupted entry removed.")
+        return 0
+    else:
+        print("Cancelled — corrupted entry remains.")
+        return 1
 
 def max_consecutive_chars(pw: str) -> int:
     """
-    Check to see if there are too many consecutive identical characters.
+    -------------------------------------------------------
+    Returns the length of the longest run of identical consecutive characters
+    in the given password string.
+
+    Use:
+        if max_consecutive_chars(new_pw) > 3:
+            print("Too many repeated characters")
+
+    -------------------------------------------------------
+    Parameters:
+        pw - password string to analyze (str)
+
+    Returns:
+        int - length of the longest sequence of the same character
+    -------------------------------------------------------
     """
     max_run = 1
     current_run = 1
@@ -284,7 +712,24 @@ def max_consecutive_chars(pw: str) -> int:
 
 def get_int(prompt: str, default=None):
     """
-    Ensures user inputs a valid integer. Optionally accepts a default value.
+    -------------------------------------------------------
+    Repeatedly prompts the user until a valid integer is entered.
+
+    Allows pressing Enter to accept a default value (if provided).
+    Rejects any input containing non-digit characters.
+
+    Use:
+        age = get_int("Enter age: ", default=30)
+        count = get_int("How many items? ")  # no default → must type a number
+    -------------------------------------------------------
+    Parameters:
+        prompt  - text displayed to the user (str)
+        default - value returned on empty input (int | None)
+                  None = no default, keep asking until valid number
+    Returns:
+        int - a validated integer 
+              or the default value if user pressed Enter
+    -------------------------------------------------------
     """
     while True:
         val = input(prompt).strip()
@@ -294,6 +739,144 @@ def get_int(prompt: str, default=None):
             return int(val)
         print("   Invalid — numbers only")
 
+def copy_to_clipboard(text: str, timeout: int = 30) -> None:
+    """
+    -------------------------------------------------------
+    Copies sensitive text (password) to the system clipboard
+    and automatically clears it after a timeout for security.
+
+    Starts a background daemon thread that waits `timeout` seconds,
+    then attempts to wipe the clipboard and its history.
+
+    Use:
+        copy_to_clipboard(password)
+        copy_to_clipboard(password, timeout=15)  # faster clear
+        copy_to_clipboard(password, timeout=0)   # do not clear
+
+    -------------------------------------------------------
+    Parameters:
+        text     - text to copy (str)
+        timeout  - seconds before auto-clear (int)
+                   0 or negative = copy only, no auto-clear
+
+    Returns:
+        None
+
+    -------------------------------------------------------
+    Behavior:
+        • Uses pyperclip.copy() — works on Windows/macOS/Linux
+        • Spawns a daemon thread — dies cleanly when program exits
+        • Calls clear_clipboard_history() after delay
+    -------------------------------------------------------
+    """
+    if not text:
+        return
+
+    # Copy to clipboard
+    pyperclip.copy(text)
+    print(f"Password copied! (auto-clears in {timeout}s)", flush=True)
+
+    if timeout <= 0:
+        return
+
+    def auto_clear():
+        time.sleep(timeout)
+        try:
+            pyperclip.copy("")
+            clear_clipboard_history()
+        except Exception:
+            # prevent clipboard errors from crashing program
+            pass
+
+    threading.Thread(target=auto_clear, daemon=True).start()
+
+    return
+
+def clear_clipboard_history(clipboard_length: int = CLIPBOARD_LENGTH):
+    """
+    -------------------------------------------------------
+    Aggressively wipes clipboard and clipboard history by flooding it
+    with random entries. 
+
+    Use:
+        Called automatically by copy_to_clipboard() after timeout
+        Called on program exit
+    -------------------------------------------------------
+    Parameters:
+        clipboard_length - number of fake entries to generate (int)
+
+    Returns:
+        None
+
+    -------------------------------------------------------
+    Behavior:
+        • Generates unique, random 40+ char strings using secrets
+        • Copies each one with a short delay to bypass throttling
+        • Final copy: "Clipboard history cleared"
+        • Respects global WIPE_CLIPBOARD toggle
+
+    Note:
+        Disabled if WIPE_CLIPBOARD = False in config
+        Best effort only - Certain clipboard managers have 
+         very long histories (200 - unlimited).
+    -------------------------------------------------------
+    """
+    if not WIPE_CLIPBOARD:
+        return
+    
+    import pyperclip, secrets, string, time
+    
+    char_set = string.ascii_letters + string.digits + "!@#$%^&*"
+
+    for i in range(clipboard_length):
+        fake_data = ''.join(secrets.choice(char_set) for _ in range(40))
+        fake_data = f"[{i:03d}] {fake_data} - {secrets.token_hex(8)}"
+
+        pyperclip.copy(fake_data)
+        
+        # Defeats throttling
+        time.sleep(0.07)
+
+    pyperclip.copy("Clipboard history cleared")
+    return
+
+def get_note_from_user() -> str:
+    """
+    -------------------------------------------------------
+    Interactively prompts the user to enter a multi-line note.
+
+    The note ends when the user presses Enter **three times in a row**.
+    Pressing Enter once at the very beginning leaves the note empty.
+
+    Use:
+        Called when editing an entry's note field
+
+    -------------------------------------------------------
+    Parameters:
+        None
+
+    Returns:
+        str - the complete note text with preserved line breaks
+              (trailing newline stripped, empty string if no input)
+
+    -------------------------------------------------------
+    """
+    print("Enter note (Enter 3x to end note or 1x to leave empty):")
+    note = ""
+    consecutive_empty = 0
+
+    while True:
+        line = input()
+        if line == "":
+            consecutive_empty += 1
+            if consecutive_empty >= 3 or (consecutive_empty == 1 and note == ""):
+                break
+        else:
+            consecutive_empty = 0
+            note += line + "\n"
+
+    return note.strip()
+
 def random_password(length: int = PASS_DEFAULTS["length"],
     min_upper: int = PASS_DEFAULTS["min_upper"],
     min_lower: int = PASS_DEFAULTS["min_lower"],
@@ -301,11 +884,52 @@ def random_password(length: int = PASS_DEFAULTS["length"],
     min_syms: int = PASS_DEFAULTS["min_symbols"], 
     avoid_ambig = PASS_DEFAULTS["avoid_ambiguous"]) -> str:
     """
-    Generate a strong random password.
-    Uses secrets module → cryptographically secure.
+    -------------------------------------------------------
+    Generates a strong, cryptographically secure random password
+    that meets configurable complexity requirements.
+
+    Use:
+        pw = random_password()                     # system defaults
+        pw = random_password(length=20, min_syms=4) # custom
+
+    -------------------------------------------------------
+    Parameters:
+        length      - total password length (int)
+        min_upper   - minimum uppercase letters (int)
+        min_lower   - minimum lowercase letters (int)
+        min_nums    - minimum digits (int)
+        min_syms    - minimum symbols (int)
+        avoid_ambig - if True, 
+                    removes easily confused chars (l, I, 1, O, 0 etc.)
+
+    Returns:
+        str - generated password meeting all requirements
+
+    -------------------------------------------------------
+    Security features:
+        • Cryptographically secure via secrets module
+        • Enforces minimum character class requirements
+        • Optional exclusion of ambiguous characters
+        • Reshuffles if too many consecutive identical chars
+        • No predictable patterns — shuffled randomly
+
+    Raises:
+        ValueError - if length is too short to satisfy minimum requirements
+
+    Example:
+        random_password(length=16) → "K7$mPx!vN9qL2wE8"
+    -------------------------------------------------------
     """
     if length < (min_upper + min_lower + min_nums + min_syms):
-        raise ValueError(f"Length {length} too short for requirements")
+        raise ValueError(
+        f"Password length {length} is too short!\n"
+        f"  Need at least {min_upper + min_lower + min_nums + min_syms} characters "
+        f"for your requirements:\n"
+        f"  • {min_upper} uppercase\n"
+        f"  • {min_lower} lowercase\n"
+        f"  • {min_nums} numbers\n"
+        f"  • {min_syms} symbols"
+    )
 
     # Define character pools
     lower = string.ascii_lowercase
@@ -320,7 +944,6 @@ def random_password(length: int = PASS_DEFAULTS["length"],
         upper = ''.join(c for c in upper if c not in exclude)
         nums  = ''.join(c for c in nums  if c not in exclude)
 
-    # Add a bit more weight to lower case letter and create a pool 
     all_chars = lower + upper + nums + syms
 
     # Step 1: Guarantee minimums
@@ -334,7 +957,7 @@ def random_password(length: int = PASS_DEFAULTS["length"],
     remaining = length - len(password)
     password.extend(secrets.choice(all_chars) for _ in range(remaining))
 
-    # Step 3: Shuffle so required chars aren't clumped at start
+    # Step 3: Shuffle all the characters 
     secrets.SystemRandom().shuffle(password)
     pw = ''.join(password)
 
@@ -360,221 +983,56 @@ def ask_password(prompt: str = "Password:") -> str:
         choice = input(" → ").strip().lower()
 
         if choice == "":
-            pw = getpass.getpass(f"Enter password (min length = {PASS_DEFAULTS['min_length']}): ").strip()
+            pw = getpass.getpass(
+                f"Enter password (min length = {PASS_DEFAULTS['min_length']}): "
+                ).strip()
             if len(pw) < PASS_DEFAULTS["min_length"]:
-                print("  Password too short, try again.")
+                print(f"  Password too short (minimum {PASS_DEFAULTS['min_length']} characters)")
                 continue
             return pw
 
-        elif choice in {"g", "gen", "generate"}:
-            pw = random_password(20)
-            print(f" Generated: \n{pw} \a")
-
-            accept = input("\n  Accept this password? (y/n): ").strip().lower()
-            if accept != "y":
-                pw = ''
+        elif choice == "g":
+            pw = random_password()
+            print(f" Generated: {pw}")
+            if input("\n Accept this password? (y/n): ").strip().lower() != "y":
                 continue
-
-            copy = input("  Copy to clipboard? (y/n): ").strip().lower()
-            if copy == "y":
-                copy_to_clipboard(pw, timeout=60)
-
+            if input(" Copy to clipboard? (y/n): ").strip().lower() == "y":
+                copy_to_clipboard(pw, timeout=CLIPBOARD_TIMEOUT)
             return pw
 
-        elif choice in {"c", "custom", "customizable"}:
-            pw_len = get_int("\n  Enter desired length (minimum 14, Enter for default): ", default=PASS_DEFAULTS["length"])
-            if pw_len < 14:
-                print("  Length too short, using 20.")
-                pw_len = 20
-            min_upper = get_int("  Minimum upper case (Enter for default): ", default=PASS_DEFAULTS["min_upper"])
-            min_nums = get_int("  Minimum numbers (Enter for default): ", default=PASS_DEFAULTS["min_digits"])
-            min_symb = get_int("  Minimum symbols (Enter for default): ", default=PASS_DEFAULTS["min_symbols"])
+        elif choice == "c":
+            pw_len = get_int(
+                f"\n  Enter desired length (minimum {PASS_DEFAULTS['min_length']}, "
+                f"Enter for default of {PASS_DEFAULTS['length']}): ", 
+                default=PASS_DEFAULTS["length"]
+                )
+            if pw_len < PASS_DEFAULTS['min_length']:
+                print(f"  Length too short, using {PASS_DEFAULTS['length']}.")
+                pw_len = PASS_DEFAULTS['length']
+            min_upper = get_int("  Minimum upper case (Enter for default): ", 
+                                default=PASS_DEFAULTS["min_upper"])
+            min_nums = get_int("  Minimum numbers (Enter for default): ", 
+                               default=PASS_DEFAULTS["min_digits"])
+            min_syms = get_int("  Minimum symbols (Enter for default): ", 
+                               default=PASS_DEFAULTS["min_symbols"])
 
-            if pw_len < (min_upper + min_nums + min_symb):
-                print("  Requirements exceed length, try again.")
+            try:
+                pw = random_password(length = pw_len,
+                                      min_upper = min_upper,
+                                        min_nums = min_nums,
+                                          min_syms = min_syms)
+            except ValueError as e:
+                print (f"\n  {e}")
                 continue
-            pw = random_password(pw_len, min_upper, min_nums, min_symb)
+
             print(f"\n Generated: {pw}")
-
-            accept = input("\n Accept this password? (y/n): ").strip().lower()
-            if accept != "y":
-                pw = ''
+            if input("\n Accept this password? (y/n): ").strip().lower() != "y":
                 continue
-
-            copy = input(" Copy to clipboard? (y/n): ").strip().lower()
-            if copy == "y":
-                copy_to_clipboard(pw, timeout=30)
-
+            if input(" Copy to clipboard? (y/n): ").strip().lower() == "y":
+                copy_to_clipboard(pw, timeout=CLIPBOARD_TIMEOUT)
             return pw
         else:
             print("Invalid — press Enter, 'g', or 's'")
-    
-
-def load_vault(master_pw: str):
-    # Create new passwords file if it doesn't exist
-    if not os.path.exists(VAULT_FILE):
-        print("Creating new password vault...")
-        salt = os.urandom(16)
-        key = derive_key(master_pw, salt)
-        vault = {
-        "salt": base64.urlsafe_b64encode(salt).decode(),
-        "canary": encrypt(KEY_CHECK_STRING, key),
-        "entries": {}
-    }
-
-        # Write the new passwords file to disk
-        with open(VAULT_FILE, "w", encoding="utf-8") as f:
-            json.dump(vault, f, indent=2)
-
-        return key, {}, salt
-    
-    # Load existing passwords file
-    with open(VAULT_FILE, encoding="utf-8") as f:
-        vault = json.load(f)
-
-    # Get the current salt and master key
-    salt = base64.urlsafe_b64decode(vault["salt"])
-    key = derive_key(master_pw, salt)
-
-    # Verify password using the canary (works even if entries is empty)
-    if "canary" in vault:
-        try:
-            if decrypt(vault["canary"], key).decode() != KEY_CHECK_STRING:
-                print("Wrong master password!")
-                exit()
-        except:
-            print("Wrong master password! or corrupted vault!")
-            exit()
-
-    encrypted_entries = vault.get("entries", {})
-
-    return key, encrypted_entries, salt
-
-def save_vault(encrypted_entries: dict, salt: bytes, key: bytes):
-    vault = {
-        "salt": base64.urlsafe_b64encode(salt).decode(),
-        "canary": encrypt(KEY_CHECK_STRING, key),
-        "entries": encrypted_entries
-    }
-
-    with open(VAULT_FILE, "w", encoding="utf-8") as f:
-        json.dump(vault, f, indent=2)
-
-    return
-
-def list_entries(encrypted_entries: dict, key: bytes):
-    if not encrypted_entries:
-        print("Empty vault")
-        return
-    print("\nYour entries:")
-    print (f"{'ID':>8} → {'Site':>10} Account")
-    print("-" * 30)
-    entries = {}
-
-    for eid, blob in encrypted_entries.items():
-        try:
-            data = json.loads(decrypt(blob, key).decode())
-            entries[eid] = (data['site'], data.get("account", ""))
-        except:
-            print(f"  {eid} → [corrupted]")
-    data = None
-
-    # Sort by site name, then account
-    sorted_entries = sorted(
-        entries.items(),
-        key=lambda entry: (entry[1][0].lower(), entry[1][1].lower())
-    )
-    for eid, (site, account) in sorted_entries:
-        print(f"{eid:>3} → {site:>10} {account}")
-
-    # Clear temp
-    entries = {}
-    sorted_entries = {}
-    return
-
-def search_entries(encrypted_entries: dict, key: bytes):
-    if not encrypted_entries:
-        print("Empty vault")
-        return
-    query = input("Enter search term: ").strip().lower()
-    if not query:
-        print("Empty search — cancelled")
-        return
-    
-    print("\nYour entries:")
-    print (f"{'ID':>8} → {'Site':>10} Account")
-    print("-" * 30)
-    matches = {}
-
-    for eid, blob in encrypted_entries.items():
-        try:
-            data = json.loads(decrypt(blob, key).decode())
-            text = " ".join([
-                data.get("site", ""),
-                data.get("account", ""),
-                data.get("note", ""),
-            ]).lower()
-            if query in text:
-                matches[eid] = (data['site'], data.get("account", ""))
-        except:
-            print(f"  {eid} → [corrupted]")
-
-    data = None
-
-    # Sort by site name, then account
-    sorted_entries = sorted(
-        matches.items(),
-        key=lambda entry: (entry[1][0].lower(), entry[1][1].lower())
-    )
-    for eid, (site, account) in sorted_entries:
-        print(f"{eid:>3} → {site:>10} {account}")
-
-    if matches == {}:
-        print(" No matches found.")
-
-    # Clear temp
-    matches = {}
-    sorted_entries = {}
-    return
-
-def change_master_password():
-    print("\n=== Change Master Password ===")
-    old_pw = getpass.getpass("Current master password: ").strip()
-    new_pw = getpass.getpass("New master password: ").strip()
-    confirm = getpass.getpass("Confirm new master password: ").strip()
-
-    if new_pw != confirm:
-        print("New passwords do not match!")
-        return
-
-    if not new_pw:
-        print("Master password cannot be empty!")
-        return
-
-    # 1. Try to load with the old password (this also verifies it)
-    try:
-        temp_key, temp_entries, _ = load_vault(old_pw)
-    except SystemExit:
-        print("Wrong current password!")
-        return
-
-    # 2. Derive a completely new salt and new key from the new password
-    new_salt = os.urandom(16)
-    new_key = derive_key(new_pw, new_salt)
-
-    # 3. Re-encrypt every single blob with the new key
-    new_encrypted_entries = {}
-    for eid, old_blob in temp_entries.items():
-        # Decrypt with old key
-        plaintext = decrypt(old_blob, temp_key).decode()
-
-        # Encrypt again with new key
-        new_blob = encrypt(plaintext, new_key)
-        new_encrypted_entries[eid] = new_blob
-
-    # 4. Save with the new salt and new encrypted blobs
-    save_vault(new_encrypted_entries, new_salt, new_key)
-    print("Master password changed successfully!")
 
 # ── MAIN PROGRAM ─────────────────────────────────────────
 def main():
@@ -582,7 +1040,7 @@ def main():
     master_pw = getpass.getpass("Master password: ").strip()
     key, encrypted_entries, salt = load_vault(master_pw)
     # clears clipboard on exit
-    atexit.register(force_clear_on_exit)
+    atexit.register(clear_clipboard_history)
 
     while True:
         print("\n1. Add   2. Get   3. Edit   4. List Sites   5. Search  6. Change Master PW   7. Quit")
@@ -640,13 +1098,13 @@ def main():
 
                 if choice_2 == "c":
                     pw = get_entry_data(encrypted_entries, key, eid).get("password") or ""
-                    copy_to_clipboard(pw, timeout=30)
+                    copy_to_clipboard(pw, timeout=CLIPBOARD_TIMEOUT)
                     pw = None
                     break
 
                 elif choice_2 == "s" and not password_shown:
                     print(f"ID: {eid}")
-                    res = display_entry(encrypted_entries, key, eid, show_password=True)
+                    res = display_entry(encrypted_entries, key, eid, show_pass=True)
                     if res != 0:
                         continue
                     password_shown = True
@@ -655,36 +1113,31 @@ def main():
                     break
 
                 else:
-                    print("\rInvalid — press C, S, or Enter \n", end="", flush=True)
+                    print("\rInvalid — press C, S, or Enter \n\n", end="", flush=True)
                     time.sleep(0.5)
         
         # ── EDIT ENTRY ───────────────────────────────────────
         elif choice == "3":
             eid = input("Enter ID: ").strip().lower()
-
             update_entry(encrypted_entries, key, salt, eid)
 
         # ── LIST SITES ─────────────────────────────────────────
         elif choice == "4":
             list_entries(encrypted_entries, key)
 
-        # ── SEARCH ───────────────────────────────────────────────
+        # ── SEARCH ─────────────────────────────────────────────
         elif choice == "5":
-            search_entries(encrypted_entries, key)
+            query = input("Enter search term: ").strip().lower()
+            list_entries(encrypted_entries, key, query)
 
-        # ── CHANGE MASTER PW ───────────────────────────────────────────────
+        # ── CHANGE MASTER PW ───────────────────────────────────
         elif choice == "6":
             change_master_password()
 
         # ── QUIT ───────────────────────────────────────────────
         elif choice == "7":
             print("Goodbye!")
-            exit()
+            sys.exit(0)
 
 if __name__ == "__main__":
-    try:
-        from cryptography.fernet import Fernet
-    except ImportError:
-        os.system("pip install --quiet cryptography")
-        from cryptography.fernet import Fernet
     main()

@@ -5,3 +5,4 @@ __pycache__/
 .vscode/
 personal_notes.txt
 test_files/
+config_local.py
