@@ -29,7 +29,7 @@ Designed with memory safety in mind, single-entry decryption, and automatic clip
 git clone https://github.com/LukeTatarsky/PasswordVault.git
 cd PasswordVault
 pip install -r requirements.txt
-python MyVault.py
+python PasswordVault CLI.py
 ```
 ### Configuration
 The application uses a two-file configuration system:
