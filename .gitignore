@@ -6,3 +6,5 @@ __pycache__/
 personal_notes.txt
 test_files/
 config_local.py
+error.log
+vault*.*

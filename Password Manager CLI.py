@@ -50,9 +50,26 @@ logging.basicConfig(
 )
 def log_uncaught_exceptions(exctype, value, tb):
     now = pendulum.now().to_iso8601_string()
-    tb_str = ''.join(traceback.format_exception(exctype, value, tb))
-    logging.error(f"[{now}] Uncaught exception:\n{tb_str}")
-    print("An unexpected error occurred. See error.log for details.", file=sys.stderr)
+
+    lines = []
+    for frame in traceback.extract_tb(tb):
+        filename = os.path.basename(frame.filename)  # e.g. vault.py
+        lines.append(f"  File \"{filename}\", line {frame.lineno}, in {frame.name}")
+
+    trace_summary = "\n".join(reversed(lines)) if lines else "  <no traceback>"
+
+    error_msg = f"{exctype.__name__}: {value}"
+
+    logging.error(
+        f"[{now}] Uncaught exception: {error_msg}\n"
+        f"Traceback (most recent call last):\n"
+        f"{trace_summary}\n"
+        f"{error_msg}"
+    )
+
+    print("\nOops! Something went wrong.")
+    print("Details saved to error.log\n", file=sys.stderr)
+
 sys.excepthook = log_uncaught_exceptions
 
 # ──────────────────────────────────────────────────────────────
@@ -1121,7 +1138,6 @@ def export_json(filepath, key, encrypted_entries, salt):
             try:
                 decrypted_json = decrypt(blob, key)
                 data = json.loads(decrypted_json)
-
                 # store tuple (eid, data) for sorting later
                 decrypted_items.append((eid, data))
 
