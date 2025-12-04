@@ -19,7 +19,7 @@ import re
 import base64
 import traceback
 import logging
-from typing import Dict, Any,Tuple
+from typing import Dict, Any, Tuple, Final
 
 # ──────────────────────────────────────────────────────────────
 # Third-party imports
@@ -38,7 +38,10 @@ except ImportError as e:
     print("\nInstall with:")
     print("  pip install -r requirements.txt")
     sys.exit(1)
-
+# ──────────────────────────────────────────────────────────────
+# System Constants
+# ──────────────────────────────────────────────────────────────
+_UTF8: Final = "utf-8"
 # ──────────────────────────────────────────────────────────────
 # Logging
 # ──────────────────────────────────────────────────────────────
@@ -108,7 +111,7 @@ def encrypt(text: str, key: bytes) -> str:
         str  - URL-safe base64 Fernet token
     -------------------------------------------------------
     """
-    return Fernet(key).encrypt(text.encode()).decode()
+    return Fernet(key).encrypt(text.encode(_UTF8)).decode(_UTF8)
 
 def decrypt(token: str, key: bytes) -> str:
     """
@@ -129,7 +132,7 @@ def decrypt(token: str, key: bytes) -> str:
                tampered with, or the key is incorrect
     -------------------------------------------------------
     """
-    return Fernet(key).decrypt(token.encode()).decode()
+    return Fernet(key).decrypt(token.encode(_UTF8)).decode(_UTF8)
 
 def get_entry_data(entries: dict[str, str], key: bytes, eid: str) -> dict[str, object]:
     """
@@ -603,9 +606,9 @@ def list_entries(encrypted_entries: dict[str, str], key: bytes,
             # Build searchable text
             searchable_str = " ".join([site, account, note]).lower()
             
+            # Filter if searching
             if query:
                 query = query.lower().strip()
-                # Filter if searching
                 terms = query.split()
             
                 # Keep entry only if ALL words appear somewhere

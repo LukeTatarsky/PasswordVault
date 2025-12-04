@@ -8,3 +8,4 @@ test_files/
 config_local.py
 error.log
 vault*.*
+error*.log
