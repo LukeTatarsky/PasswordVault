@@ -1,4 +1,4 @@
-# .gitignore
+# gitignore
 password_vault*.json
 *.pyc
 __pycache__/

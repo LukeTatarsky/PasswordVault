@@ -17,6 +17,8 @@ import secrets
 import string
 import re
 import base64
+import traceback
+import logging
 from typing import Dict, Any,Tuple
 
 # ──────────────────────────────────────────────────────────────
@@ -36,6 +38,22 @@ except ImportError as e:
     print("\nInstall with:")
     print("  pip install -r requirements.txt")
     sys.exit(1)
+
+# ──────────────────────────────────────────────────────────────
+# Logging
+# ──────────────────────────────────────────────────────────────
+logging.basicConfig(
+    filename="error.log",
+    filemode="a",
+    level=logging.ERROR,
+    format="%(message)s"
+)
+def log_uncaught_exceptions(exctype, value, tb):
+    now = pendulum.now().to_iso8601_string()
+    tb_str = ''.join(traceback.format_exception(exctype, value, tb))
+    logging.error(f"[{now}] Uncaught exception:\n{tb_str}")
+    print("An unexpected error occurred. See error.log for details.", file=sys.stderr)
+sys.excepthook = log_uncaught_exceptions
 
 # ──────────────────────────────────────────────────────────────
 # Functions
@@ -183,7 +201,10 @@ def load_vault(master_pw: str) -> Tuple[bytes, Dict[str, str], bytes]:
     try:
         salt = base64.urlsafe_b64decode(vault["salt"])
     except (KeyError, base64.binascii.Error):
-        print("Vault is corrupted: missing or invalid salt!")
+        msg = "Vault is corrupted: missing or invalid salt!"
+        print(msg)
+        now = pendulum.now().to_iso8601_string()
+        logging.error(f"[{now}] {msg}\n")
         sys.exit(1)
 
     # Derive key from user password + stored salt
@@ -193,16 +214,25 @@ def load_vault(master_pw: str) -> Tuple[bytes, Dict[str, str], bytes]:
     # 3. Verify master password using the canary
     # ──────────────────────────────────────────────────────────────
     if "canary" not in vault:
-        print("Vault corrupted: missing canary!")
+        msg = "Vault corrupted: missing canary!"
+        print(msg)
+        now = pendulum.now().to_iso8601_string()
+        logging.error(f"[{now}] {msg}\n")
         sys.exit(1)
 
     try:
         decrypted_canary = decrypt(vault["canary"], key)
         if decrypted_canary != KEY_CHECK_STRING:
-            print("Wrong master password!")
+            msg = "Wrong master password!"
+            print(msg)
+            now = pendulum.now().to_iso8601_string()
+            logging.error(f"[{now}] {msg}\n")
             sys.exit(1)
     except InvalidToken:
-        print("Wrong master password or vault is corrupted!")
+        msg = "Wrong master password or vault is corrupted!"
+        print(msg)
+        now = pendulum.now().to_iso8601_string()
+        logging.error(f"[{now}] {msg}\n")
         sys.exit(1)
 
     # ──────────────────────────────────────────────────────────────
@@ -1076,7 +1106,7 @@ def ask_password(prompt: str = "Password:") -> str:
             print("Invalid — press Enter, 'g', or 's'")
 
 
-def export_json(key, encrypted_entries, salt):
+def export_json(filepath, key, encrypted_entries, salt):
     """
     Function to export the entire vault to a JSON file in decrypted form.
     Entries are sorted by site and account.
@@ -1119,7 +1149,7 @@ def export_json(key, encrypted_entries, salt):
             vault["entries"][eid] = data
 
         # Save to file
-        with open("vault_export.json", "w", encoding="utf-8") as f:
+        with open(filepath, "w", encoding="utf-8") as f:
             json.dump(vault, f, indent=4)
 
         print("Vault exported successfully.")
@@ -1361,11 +1391,14 @@ def main():
 
         # in development
         elif choice == "export_json":
-            export_json(key,encrypted_entries,salt)
+            timestamp = pendulum.now().format('YYYY_MM_DD_HH_mm_ss')
+            export_json(f"vault_export_{timestamp}.json", key,encrypted_entries,salt)
         elif choice == "import_csv":
-            import_csv("vault_import.csv", encrypted_entries, key, salt)
+            filename = input("Enter CSV filename to import: ").strip()
+            import_csv(f"{filename}.csv", encrypted_entries, key, salt)
         elif choice == "import_json":
-            import_exported_json("vault_export.json", encrypted_entries, key, salt)
+            filename = input("Enter JSON filename to import: ").strip()
+            import_exported_json(f"{filename}.json", encrypted_entries, key, salt)
 
 
 if __name__ == "__main__":
