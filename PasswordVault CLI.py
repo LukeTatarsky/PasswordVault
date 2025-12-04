@@ -1,5 +1,5 @@
 """
-PasswordVault Password Manager
+PasswordVault - a secure offline password manager
 """
 # ──────────────────────────────────────────────────────────────
 # Standard imports
