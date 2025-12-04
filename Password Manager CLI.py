@@ -602,10 +602,15 @@ def list_entries(encrypted_entries: dict[str, str], key: bytes,
 
             # Build searchable text
             searchable_str = " ".join([site, account, note]).lower()
-
-            # Filter if searching
-            if query and query not in searchable_str:
-                continue
+            
+            if query:
+                query = query.lower().strip()
+                # Filter if searching
+                terms = query.split()
+            
+                # Keep entry only if ALL words appear somewhere
+                if not all(term in searchable_str for term in terms):
+                    continue
 
             display_data[eid] = (site, account)
 
