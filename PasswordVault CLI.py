@@ -1,6 +1,5 @@
 """
-MyVault Password Manager v4
-Local password manager with strong encryption and random password generation.
+PasswordVault Password Manager
 """
 # ──────────────────────────────────────────────────────────────
 # Standard imports
@@ -585,7 +584,7 @@ def list_entries(encrypted_entries: dict[str, str], key: bytes,
         • Full-text search across site, account, and note
         • Passwords never shown
         • Corrupted entries handled gracefully
-        • Sorted alphabetically by site → accountg
+        • Sorted alphabetically by site → account
         • Memory-safe — temporary decrypted data cleared
     -------------------------------------------------------
     """
@@ -920,8 +919,6 @@ def clear_clipboard_history(clipboard_length: int = CLIPBOARD_LENGTH):
     if not WIPE_CLIPBOARD:
         return
     
-    import secrets, string, time
-    
     char_set = string.ascii_letters + string.digits + "!@#$%^&*"
 
     for i in range(clipboard_length):
@@ -1058,9 +1055,14 @@ def random_password(length: int = PASS_DEFAULTS["length"],
     pw = ''.join(password)
 
     # Step 4: Ensure no excessive consecutive identical chars, reshuffle if needed
+    max_shuffles = 1000
+    shuffle_count = 0
     while max_consecutive_chars(pw) > PASS_DEFAULTS["max_consecutive"]:
         secrets.SystemRandom().shuffle(password)
         pw = ''.join(password)
+        shuffle_count += 1
+        if shuffle_count >= max_shuffles:
+            break
 
     return pw
 
@@ -1128,14 +1130,18 @@ def ask_password(prompt: str = "Password:") -> str:
                 copy_to_clipboard(pw, timeout=CLIPBOARD_TIMEOUT)
             return pw
         else:
-            print("Invalid — press Enter, 'g', or 's'")
+            print("Invalid — press Enter, 'g', or 'c'")
 
 
-def export_json(filepath, key, encrypted_entries, salt):
+def export_json(filepath, key, encrypted_entries):
     """
     Function to export the entire vault to a JSON file in decrypted form.
     Entries are sorted by site and account.
     """
+    print("\nWARNING: This will export ALL passwords in PLAIN TEXT!")
+    if input("Type 'EXPORT' to continue: ") != "EXPORT":
+        print("Export cancelled.")
+        return
 
     try:
         # Temporary list to hold decrypted entries
@@ -1162,8 +1168,6 @@ def export_json(filepath, key, encrypted_entries, salt):
 
         # Build final vault structure
         vault = {
-            "salt": base64.urlsafe_b64encode(salt).decode("ascii"),
-            "canary": encrypt(KEY_CHECK_STRING, key),
             "date_exported": pendulum.now().in_timezone('local').format(DT_FORMAT),
             "entries": {}
         }
@@ -1415,12 +1419,17 @@ def main():
 
         # in development
         elif choice == "export_json":
+            print("Note: In development. Not fully tested.")
+            print("Used to safely backup data for safe storage.")
             timestamp = pendulum.now().format('YYYY_MM_DD_HH_mm_ss')
             export_json(f"vault_export_{timestamp}.json", key,encrypted_entries,salt)
         elif choice == "import_csv":
+            print("Note: In development. Not fully tested.")
+            print("Used to populate the vault.")
             filename = input("Enter CSV filename to import: ").strip()
             import_csv(f"{filename}.csv", encrypted_entries, key, salt)
         elif choice == "import_json":
+            print("Note: In development. Not fully tested.")
             filename = input("Enter JSON filename to import: ").strip()
             import_exported_json(f"{filename}.json", encrypted_entries, key, salt)
 

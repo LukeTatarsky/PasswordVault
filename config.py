@@ -7,6 +7,8 @@ Configuration constants
 # ──────────────────────────────────────────────────────────────
 VAULT_FILE = "password_vault.json"        # Name of encrypted vault file
 KEY_CHECK_STRING = "MasterKeyValidation"  # Canary to verify master password
+
+# Changing iterations will invalidate existing vaults. Backup plaintext first!
 ITERATIONS = 1_000_000                    # Used to generate master key
 
 # ──────────────────────────────────────────────────────────────
