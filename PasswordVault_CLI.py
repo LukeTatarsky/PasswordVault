@@ -1,9 +1,9 @@
 """
 PasswordVault - a secure offline password manager
 """
-# ──────────────────────────────────────────────────────────────
+# ==============================================================
 # Standard imports
-# ──────────────────────────────────────────────────────────────
+# ==============================================================
 import os
 import sys
 import json
@@ -20,9 +20,9 @@ import traceback
 import logging
 from typing import Dict, Any, Tuple, Final
 
-# ──────────────────────────────────────────────────────────────
+# ==============================================================
 # Third-party imports
-# ──────────────────────────────────────────────────────────────
+# ==============================================================
 try:
     import pyperclip
     import pendulum
@@ -36,13 +36,13 @@ except ImportError as e:
     print("\nInstall with:")
     print("  pip install -r requirements.txt")
     sys.exit(1)
-# ──────────────────────────────────────────────────────────────
+# ==============================================================
 # System Constants
-# ──────────────────────────────────────────────────────────────
+# ==============================================================
 _UTF8: Final = "utf-8"
-# ──────────────────────────────────────────────────────────────
+# ==============================================================
 # Logging
-# ──────────────────────────────────────────────────────────────
+# ==============================================================
 logging.basicConfig(
     filename="error.log",
     filemode="a",
@@ -73,9 +73,9 @@ def log_uncaught_exceptions(exctype, value, tb):
 
 sys.excepthook = log_uncaught_exceptions
 
-# ──────────────────────────────────────────────────────────────
+# ==============================================================
 # Functions
-# ──────────────────────────────────────────────────────────────
+# ==============================================================
 def derive_key(pw: str, salt: bytes) -> bytes:
     """
     -------------------------------------------------------
@@ -208,9 +208,9 @@ def load_vault(master_pw: str) -> Tuple[bytes, Dict[str, str], bytes]:
         Prints status messages.
     -------------------------------------------------------
     """
-    # ──────────────────────────────────────────────────────────────
+    # ==============================================================
     # 1. Create new vault if none exists
-    # ──────────────────────────────────────────────────────────────
+    # ==============================================================
     if not os.path.exists(VAULT_FILE):
         print("Creating new password vault...")
         salt = os.urandom(16)
@@ -226,9 +226,9 @@ def load_vault(master_pw: str) -> Tuple[bytes, Dict[str, str], bytes]:
 
         return key, {}, salt
 
-    # ──────────────────────────────────────────────────────────────
+    # ==============================================================
     # 2. Load existing vault
-    # ──────────────────────────────────────────────────────────────
+    # ==============================================================
     with open(VAULT_FILE, encoding="utf-8") as f:
         vault: Dict[str, Any] = json.load(f)
 
@@ -245,9 +245,9 @@ def load_vault(master_pw: str) -> Tuple[bytes, Dict[str, str], bytes]:
     # Derive key from user password + stored salt
     key = derive_key(master_pw, salt)
 
-    # ──────────────────────────────────────────────────────────────
+    # ==============================================================
     # 3. Verify master password using the canary
-    # ──────────────────────────────────────────────────────────────
+    # ==============================================================
     if "canary" not in vault:
         msg = "Vault corrupted: missing canary!"
         print(msg)
@@ -270,9 +270,9 @@ def load_vault(master_pw: str) -> Tuple[bytes, Dict[str, str], bytes]:
         logging.error(f"[{now}] {msg}\n")
         sys.exit(1)
 
-    # ──────────────────────────────────────────────────────────────
+    # ==============================================================
     # 4. Return decrypted entries container
-    # ──────────────────────────────────────────────────────────────
+    # ==============================================================
     encrypted_entries: Dict[str, str] = vault.get("entries", {})
 
     print("Vault unlocked successfully.")
@@ -360,9 +360,9 @@ def display_entry(source: Dict[str, Any], key: bytes | None = None,
     -------------------------------------------------------
     """
 
-    # ──────────────────────────────────────────────────────────────
+    # ==============================================================
     # 1. Decide on input type
-    # ──────────────────────────────────────────────────────────────
+    # ==============================================================
     if eid is not None and key is not None:
         # Mode 1: Display from encrypted vault
         data = get_entry_data(source, key, eid)
@@ -377,7 +377,7 @@ def display_entry(source: Dict[str, Any], key: bytes | None = None,
     print(f"\nSite         : {data.get('site', '(missing)')}")
     print(f"Account      : {data.get('account') or ''}")
 
-    # ─── Password (masked or revealed) ────────────────────────────────────
+    # === Password (masked or revealed) ====================================
     password = data.get('password', '') or ''
     if show_pass:
         print(f"Password     : {password}")
@@ -385,7 +385,7 @@ def display_entry(source: Dict[str, Any], key: bytes | None = None,
         masked = '*' * PASS_DEFAULTS["length"] if password else ''
         print(f"Password     : {masked}")
 
-    # ─── Password History (only if requested and exists) ──────────────────
+    # === Password History (only if requested and exists) ==================
     if show_history and data.get('password_history'):
         history = data.get('password_history', [])
         if history:
@@ -396,14 +396,14 @@ def display_entry(source: Dict[str, Any], key: bytes | None = None,
                             .in_timezone('local').format(DT_FORMAT_PASS_HISTORY)} :",
                     f" {pw_entry.get('password','')}")
     
-    # ─── Note ─────────────────────────────────────────────────────────────
+    # === Note =============================================================
     print("Note         :")
     note = data.get('note', '').strip()
     if note:
         print("-" * 40)
         print(note)
         print("-" * 40)
-    # ─── Timestamps ───────────────────────────────────────────────────────
+    # === Timestamps =======================================================
     try:
         created = pendulum.parse(data.get('created_date', '1970-01-01T00:00:00Z'))
         edited = pendulum.parse(data.get('edited_date', '1970-01-01T00:00:00Z'))
@@ -942,7 +942,6 @@ def clear_clipboard_history(clipboard_length: int = CLIPBOARD_LENGTH):
          very long histories (200 - unlimited).
     -------------------------------------------------------
     """
-    import pyperclip
     # Simple overwrite on exit
     pyperclip.copy("")
 
@@ -1333,9 +1332,9 @@ def import_csv(filepath, encrypted_entries, key, salt):
 
 
 
-# ──────────────────────────────────────────────────────────────
+# ==============================================================
 # MAIN
-# ──────────────────────────────────────────────────────────────
+# ==============================================================
 def main():
     print("- Ultimate Password Manager —\n")
     master_pw = getpass.getpass("Master password: ").strip()
@@ -1347,7 +1346,7 @@ def main():
         print("\n1. Add   2. Get   3. Edit   4. List Sites   5. Search  6. Change Master PW   7. Quit")
         choice = input("> ").strip()
 
-        # ── ADD ENTRY ─────────────────────────────────────
+        # == ADD ENTRY =====================================
         if choice == "1":
             # Get info
             site = input("Site (required): ").strip()
@@ -1383,7 +1382,7 @@ def main():
             save_vault(encrypted_entries, salt, key)
             print(f"Saved → ID: {entry_id}")
 
-        # ── GET ENTRY ───────────────────────────────────────
+        # == GET ENTRY =======================================
         elif choice == "2":
             eid = input("Enter ID: ").strip().lower()
 
@@ -1445,25 +1444,25 @@ def main():
                     print("\rInvalid — use C, S, H or Enter", flush=True)
                     time.sleep(0.5)
         
-        # ── EDIT ENTRY ───────────────────────────────────────
+        # == EDIT ENTRY =======================================
         elif choice == "3":
             eid = input("Enter ID: ").strip().lower()
             update_entry(encrypted_entries, key, salt, eid)
 
-        # ── LIST SITES ─────────────────────────────────────────
+        # == LIST SITES =========================================
         elif choice == "4":
             list_entries(encrypted_entries, key)
 
-        # ── SEARCH ─────────────────────────────────────────────
+        # == SEARCH =============================================
         elif choice == "5":
             query = input("Enter search term: ").strip().lower()
             list_entries(encrypted_entries, key, query)
 
-        # ── CHANGE MASTER PW ───────────────────────────────────
+        # == CHANGE MASTER PW ===================================
         elif choice == "6":
             change_master_password()
 
-        # ── QUIT ───────────────────────────────────────────────
+        # == QUIT ===============================================
         elif choice == "7":
             print("Goodbye!")
             sys.exit(0)
