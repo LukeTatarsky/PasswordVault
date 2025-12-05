@@ -1272,7 +1272,7 @@ def import_csv(filepath, encrypted_entries, key, salt):
             encrypted_blob = encrypt(plaintext, key)
 
             # Generate unique entry ID
-            eid = secrets.token_hex(4)   # 8 hex chars
+            eid = secrets.token_hex(4)
             while eid in encrypted_entries:
                 eid = secrets.token_hex(4)
 
@@ -1327,6 +1327,9 @@ def main():
             encrypted_blob = encrypt(entry, key)
             entry = None
             entry_id = str(uuid.uuid4())[:8]
+            # Ensure unique ID
+            while entry_id in encrypted_entries:
+                entry_id = str(uuid.uuid4())[:8]
 
             encrypted_entries[entry_id] = encrypted_blob
             save_vault(encrypted_entries, salt, key)
