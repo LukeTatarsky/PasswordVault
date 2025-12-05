@@ -6,7 +6,7 @@ Designed with memory safety in mind, single-entry decryption, and automatic clip
 
 ### Features
 - AES-128-CBC + HMAC-SHA256 encryption via Fernet
-- Master key derived with PBKDF2-HMAC-SHA256 (1M iterations) 
+- Master key derived securely using Argon2id key derivation function 
 - Master password canary instantly detects wrong password or corruption
 - Atomic file saves – never lose data on crash or power loss
 - Full-text search across site, account, and notes

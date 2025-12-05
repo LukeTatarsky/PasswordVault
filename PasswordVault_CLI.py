@@ -28,8 +28,7 @@ try:
     import pendulum
     from config import *
     from cryptography.fernet import Fernet, InvalidToken
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    from argon2.low_level import hash_secret_raw, Type
 except ImportError as e:
     missing_package = e.name if hasattr(e, "name") else "unknown package"
     print("Missing required dependency!")
@@ -80,27 +79,41 @@ sys.excepthook = log_uncaught_exceptions
 def derive_key(pw: str, salt: bytes) -> bytes:
     """
     -------------------------------------------------------
-    Derives a 32-byte key from a password and salt
-    using PBKDF2-HMAC-SHA256 and a fixed number of iterations. 
-    The key is encoded as a URL-safe base64 string 
-    suitable for direct use with Fernet.
+    Derives a cryptographic key from a password and salt 
+    using Argon2id.
+
+    This function applies the Argon2id key derivation 
+    function to generate a secure, fixed-length key 
+    for symmetric encryption(e.g., Fernet).
+
     Use: key = derive_key(password, salt)
+
     -------------------------------------------------------
     Parameters:
-        pw   - the user password or passphrase (str)
-        salt - cryptographically random salt, unique per key (bytes)
+        password     - The master password (str)
+        salt         - cryptographically random salt, 
+                        unique per key (bytes)
+
     Returns:
-        bytes - URL-safe base64-encoded 32-byte key
+        bytes        - URL-safe base64-encoded 32-byte key
     -------------------------------------------------------
     """
-    kdf = PBKDF2HMAC(hashes.SHA256(), 32, salt, ITERATIONS)
-    return base64.urlsafe_b64encode(kdf.derive(pw.encode()))
+    key = hash_secret_raw(
+        secret=pw.encode(),
+        salt=salt,
+        time_cost=ARGON_TIME,
+        memory_cost=ARGON_MEMORY,
+        parallelism=ARGON_PARALLELISM,
+        hash_len=ARGON_HASH_LEN,
+        type=Type.ID
+    )
+    return base64.urlsafe_b64encode(key)
 
 def encrypt(text: str, key: bytes) -> str:
     """
     -------------------------------------------------------
-    Encrypts a plaintext string using Fernet symmetric encryption
-    and returns the encrypted token as a string.
+    Encrypts a plaintext string using Fernet symmetric 
+    encryption and returns the encrypted token as a string.
     Use: token = encrypt("secret message", fernet_key)
     -------------------------------------------------------
     Parameters:
@@ -137,23 +150,26 @@ def get_entry_data(entries: dict[str, str], key: bytes, eid: str) -> dict[str, o
     """
     -------------------------------------------------------
     Retrieves and decrypts a single entry from a dictionary
-    of encrypted entries. The entry value is expected to be a Fernet
-    token. 
-    The decrypted JSON string is parsed and returned as a dictionary.
-    Use: entry = get_entry_data(password_db, fernet_key, "user123")
+    of encrypted entries. The entry value is expected to be
+    a Fernet token. 
+    The decrypted JSON string is parsed and returned 
+    as a dictionary.
+
+    Use: entry = get_entry_data(password_db, fernet_key,
+                             "user123")
     -------------------------------------------------------
     Parameters:
-        entries - dictionary mapping entry IDs to encrypted tokens
-                  e.g. {"user123": "gAAAAAB..."} (Dict[str, str])
-        key     - Fernet symmetric key used for decryption (bytes)
-        eid     - entry ID (dict key) to look up and decrypt (token str)
+        entries - dictionary mapping IDs to encrypted tokens
+        key     - Fernet key used for decryption (bytes)
+        eid     - entry ID to look up and decrypt (token str)
     Returns:
         Dict[str, Any] - decrypted and parsed entry data
-                         returns empty dict {} on error or if not found
+                         returns empty dict {} on error 
+                         or if not found
     -------------------------------------------------------
     Side effects:
-        Prints user-friendly messages on KeyError (not found) or
-        decryption/parsing failure (corrupted/invalid).
+        Prints user-friendly messages on KeyError (not found) 
+        or decryption/parsing failure (corrupted/invalid).
     -------------------------------------------------------
     """
     data: Dict[str, Any] = {}
@@ -276,7 +292,6 @@ def save_vault(encrypted_entries: dict[str, str], salt: bytes, key: bytes) -> No
     -------------------------------------------------------
     Parameters:
         encrypted_entries - dict mapping entry IDs to encrypted tokens
-                            e.g. {"user123": "gAAAAAB..."} (dict[str, str])
         salt              - current salt used for key derivation (bytes)
         key               - current derived Fernet key (bytes)
     Returns:
@@ -310,31 +325,34 @@ def display_entry(source: Dict[str, Any], key: bytes | None = None,
     """
     -------------------------------------------------------
     Displays a single entry in a human-readable format.
-    Supports optional password masking. Used for command line output.
+    Supports optional password masking. 
+    Used for command line output.
 
     1) When viewing from vault: pass encrypted_entries + key + eid
     2) When editing (in-memory): pass decrypted dict + key=None + eid=None
 
     Use:
         Mode 1)
-        display_entry(encrypted_entries, key, "github")         # from vault
+        display_entry(encrypted_entries, key, "github")
 
-        Mode 2)
-        display_entry(current_data)                             # while editing
-        display_entry(current_data, show_pass=True)             # reveal pw
-        display_entry(current_data, show_history=True)             # reveal pw history
+        Mode 2) 
+        display_entry(current_data)   
+        display_entry(current_data, show_pass=True)
+        display_entry(current_data, show_history=True)
     -------------------------------------------------------
     Parameters:
         source        - either:  (dict[str, Any])
-                          • encrypted_entries dict {eid: token} when viewing from vault
-                          • decrypted entry dict when editing/previewing
+                          • encrypted_entries dict {eid: token} 
+                            when viewing from vault
+                          • decrypted entry dict 
+                            when editing/previewing
         key           - Fernet key for decryption (bytes)
                          Omit when source is already decrypted
         eid           - entry ID to look up (str)
                          Omit when source is already decrypted
         show_pass - if True, reveals plaintext password
-                        if False (default), masks with asterisks (bool)
-        show_history - if True, show password change history (if any)
+                        if False, masks with asterisks (bool)
+        show_history - if True, show password history (bool)
 
     Returns:
         int - 0 on success
@@ -404,7 +422,7 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, salt: bytes, eid
     -------------------------------------------------------
     Interactive command line entry editor.
 
-    Loads and decrypts the specified entry, then presents a full-featured
+    Loads and decrypts the specified entry, then presents a
     menu allowing the user to:
       • Edit site, account, password, or note
       • View current entry
@@ -412,18 +430,21 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, salt: bytes, eid
       • Delete the entry permanently
       • Cancel and discard any changes
 
-    Changes are written to disk only if the user explicitly confirms 
-    with 's' (save) or 'del' (delete).
+    Changes are written to disk only if the user 
+    explicitly confirms with 's' (save) or 'del' (delete).
 
     Use:
-        update_entry(vault_entries, fernet_key, current_salt, "github")
+        update_entry(vault_entries, fernet_key,
+          current_salt, "github")
     -------------------------------------------------------
     Parameters:
-        encrypted_entries - current in-memory dict of encrypted entries
+        encrypted_entries - current in-memory dict of 
+                            encrypted entries
                             {entry_id: fernet_token} (dict[str, str])
-        key               - active Fernet key for decryption/encryption (bytes)
-        salt              - current vault salt (used only for saving) (bytes)
-        eid               - entry ID to edit (must exist in vault) (str)
+        key               - active Fernet key for 
+                            decryption/encryption (bytes)
+        salt              - current vault salt (bytes)
+        eid               - entry ID to edit (str)
 
     Returns:
         int - 0 on success (saved, deleted, or cancelled)
@@ -562,10 +583,12 @@ def list_entries(encrypted_entries: dict[str, str], key: bytes,
         list_entries(encrypted_entries, key, query="github")
     -------------------------------------------------------
     Parameters:
-        encrypted_entries - dict of encrypted entries {eid: token}
+        encrypted_entries - dict of encrypted entries 
+                            {eid: token}
                             (dict[str, str])
         key               - Fernet key
-        search            - optional search term (case-insensitive)
+        search            - optional search term 
+                            (case-insensitive)
                             • None  = list all
                             • str   = filter results
 
@@ -736,17 +759,22 @@ def delete_corrupted_entry(encrypted_entries: dict[str, str],
     -------------------------------------------------------
     Helper function to remove a single corrupted entry.
 
-    Used when an entry cannot be decrypted (e.g. damaged file, wrong key,
-    or encryption corruption) it blocks operations like master pw change. 
+    Used when an entry cannot be decrypted 
+    (e.g. damaged file, wrong key, or encryption corruption) 
+    it blocks operations like master pw change. 
 
     Use:
         Called when user tries to edit/view a corrupted entry.
     -------------------------------------------------------
     Parameters:
-        encrypted_entries - current in-memory encrypted vault (dict[str, str])
-        salt              - current vault salt (bytes)
-        key               - current Fernet decryption key (bytes)
-        eid               - ID of the corrupted entry to delete (str)
+        encrypted_entries - current in-memory encrypted vault
+                             (dict[str, str])
+        salt              - current vault salt 
+                            (bytes)
+        key               - current Fernet decryption key 
+                            (bytes)
+        eid               - ID of the corrupted entry to delete 
+                            (str)
 
     Returns:
         int - 0 → entry successfully deleted
@@ -773,8 +801,8 @@ def delete_corrupted_entry(encrypted_entries: dict[str, str],
 def max_consecutive_chars(pw: str) -> int:
     """
     -------------------------------------------------------
-    Returns the length of the longest run of identical consecutive characters
-    in the given password string.
+    Returns the length of the longest run of identical 
+    consecutive characters in the given password string.
 
     Use:
         if max_consecutive_chars(new_pw) > 3:
@@ -785,7 +813,8 @@ def max_consecutive_chars(pw: str) -> int:
         pw - password string to analyze (str)
 
     Returns:
-        int - length of the longest sequence of the same character
+        int - length of the longest sequence of the 
+                same character
     -------------------------------------------------------
     """
     max_run = 1
@@ -804,19 +833,19 @@ def max_consecutive_chars(pw: str) -> int:
 def get_int(prompt: str, default=None):
     """
     -------------------------------------------------------
-    Repeatedly prompts the user until a valid integer is entered.
+    Repeatedly prompts the user until an integer is entered.
 
-    Allows pressing Enter to accept a default value (if provided).
+    Allows pressing Enter to accept a default value.
     Rejects any input containing non-digit characters.
 
     Use:
-        age = get_int("Enter age: ", default=30)
-        count = get_int("How many items? ")  # no default → must type a number
+        len = get_int("Enter length: ", default=30)
+        num_uppercase = get_int("Enter min upper case: ")  
     -------------------------------------------------------
     Parameters:
         prompt  - text displayed to the user (str)
         default - value returned on empty input (int | None)
-                  None = no default, keep asking until valid number
+                  None = no default, keep asking until valid
     Returns:
         int - a validated integer 
               or the default value if user pressed Enter
@@ -886,24 +915,25 @@ def copy_to_clipboard(text: str, timeout: int = 30) -> None:
 def clear_clipboard_history(clipboard_length: int = CLIPBOARD_LENGTH):
     """
     -------------------------------------------------------
-    Aggressively wipes clipboard and clipboard history by flooding it
-    with random entries. 
+    Aggressively wipes clipboard and clipboard history 
+    by flooding it with random entries. 
 
     Use:
-        Called automatically by copy_to_clipboard() after timeout
+        Called automatically by copy_to_clipboard() 
+            after timeout
         Called on program exit
     -------------------------------------------------------
     Parameters:
-        clipboard_length - number of fake entries to generate (int)
+        clipboard_length - number of fake entries to generate 
+                            (int)
 
     Returns:
         None
 
     -------------------------------------------------------
     Behavior:
-        • Generates unique, random 40+ char strings using secrets
-        • Copies each one with a short delay to bypass throttling
-        • Final copy: "Clipboard history cleared"
+        • Generates unique, random strings using secrets
+        • Copies each one with a delay to bypass throttling
         • Respects global WIPE_CLIPBOARD toggle
 
     Note:
@@ -1068,10 +1098,28 @@ def random_password(length: int = PASS_DEFAULTS["length"],
 
 def ask_password(prompt: str = "Password:") -> str:
     """
-    Asks user for password with three easy options:
-      [Enter]     → type your own (min 8 chars)
-      g           → generate strong random one
-      c           → generate custom password
+    -------------------------------------------------------
+    Prompts the user to provide a password with three options:
+      • Press Enter → manually type a custom password
+      • Type 'g'    → generate a random password using defaults
+      • Type 'c'    → generate a customizable random password
+      
+    Use:
+        pw = ask_password()
+        pw = ask_password("Master password")
+    -------------------------------------------------------
+    Parameters:
+        prompt - the text displayed above the options menu (str)
+                 Defaults to "Password:"
+    Returns:
+        str - the final accepted password
+    -------------------------------------------------------
+    Features:
+        • Enforces minimum password length for manual entry
+        • Integrates random_password() for strong generation
+        • Optional clipboard copy with auto-clear
+        • Loops until a valid, accepted password is provided
+    -------------------------------------------------------
     """
     while True:
         print(f"\n{prompt}:")
@@ -1326,10 +1374,10 @@ def main():
             
             encrypted_blob = encrypt(entry, key)
             entry = None
-            entry_id = str(uuid.uuid4())[:8]
+            entry_id = secrets.token_hex(4)
             # Ensure unique ID
             while entry_id in encrypted_entries:
-                entry_id = str(uuid.uuid4())[:8]
+                entry_id = secrets.token_hex(4)
 
             encrypted_entries[entry_id] = encrypted_blob
             save_vault(encrypted_entries, salt, key)
@@ -1425,7 +1473,7 @@ def main():
             print("Note: In development. Not fully tested.")
             print("Used to safely backup data for safe storage.")
             timestamp = pendulum.now().format('YYYY_MM_DD_HH_mm_ss')
-            export_json(f"vault_export_{timestamp}.json", key,encrypted_entries,salt)
+            export_json(f"vault_export_{timestamp}.json", key,encrypted_entries)
         elif choice == "import_csv":
             print("Note: In development. Not fully tested.")
             print("Used to populate the vault.")

@@ -8,8 +8,12 @@ Configuration constants
 VAULT_FILE = "password_vault.json"        # Name of encrypted vault file
 KEY_CHECK_STRING = "MasterKeyValidation"  # Canary to verify master password
 
-# Changing iterations will invalidate existing vaults. Backup plaintext first!
-ITERATIONS = 1_000_000                    # Used to generate master key
+# Argon2id parameters
+# Changing these will invalidate existing vaults. Backup plaintext first!
+ARGON_TIME = 6             # Iterations - controls CPU cost
+ARGON_MEMORY = 256 * 1024  # 256 MiB - controls RAM cost
+ARGON_PARALLELISM = 2
+ARGON_HASH_LEN = 32        # # 32 byte - Fernet key size - DO NOT CHANGE
 
 # ──────────────────────────────────────────────────────────────
 # Password generation defaults (strong but practical)
@@ -43,13 +47,9 @@ DT_FORMAT = "MMM D, YYYY hh:mm:ss A"
 DT_FORMAT_PASS_HISTORY = "MMM D, YY"
 
 # ──────────────────────────────────────────────────────────────
-# Optional: local overrides (never commit this local file!)
-# Local configuration file overrides standard config values — never commit this file!
+# Optional: local overrides
+# Local configuration file overrides standard config values
 
-# from config import PASS_DEFAULTS
-# CLIPBOARD_TIMEOUT = 20
-# WIPE_CLIPBOARD = False
-# PASS_DEFAULTS["min_length"] = 0
 # ──────────────────────────────────────────────────────────────
 try:
     from config_local import *
