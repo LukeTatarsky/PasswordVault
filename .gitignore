@@ -3,10 +3,13 @@ password_vault*.json
 *.pyc
 __pycache__/
 .vscode/
+tests/
+t3sting/
+testing/
+.coverage
 personal_notes.txt
-test_files/
+practice_files/
 config_local.py
 error.log
 vault*.*
 error.log
-

@@ -7,7 +7,6 @@ PasswordVault - a secure offline password manager
 import os
 import sys
 import json
-import uuid
 import time
 import atexit
 import getpass
@@ -40,6 +39,8 @@ except ImportError as e:
 # System Constants
 # ==============================================================
 _UTF8: Final = "utf-8"
+# length of eid (hex)
+EID_LEN = 4 
 # ==============================================================
 # Logging
 # ==============================================================
@@ -54,7 +55,7 @@ def log_uncaught_exceptions(exctype, value, tb):
 
     lines = []
     for frame in traceback.extract_tb(tb):
-        filename = os.path.basename(frame.filename)  # e.g. vault.py
+        filename = os.path.basename(frame.filename)
         lines.append(f"  File \"{filename}\", line {frame.lineno}, in {frame.name}")
 
     trace_summary = "\n".join(reversed(lines)) if lines else "  <no traceback>"
@@ -68,7 +69,7 @@ def log_uncaught_exceptions(exctype, value, tb):
         f"{error_msg}"
     )
 
-    print("\nOops! Something went wrong.")
+    print("\nError! Something went wrong.")
     print("Details saved to error.log\n", file=sys.stderr)
 
 sys.excepthook = log_uncaught_exceptions
@@ -221,7 +222,7 @@ def load_vault(master_pw: str) -> Tuple[bytes, Dict[str, str], bytes]:
             "canary": encrypt(KEY_CHECK_STRING, key),
             "entries": {}
         }
-        with open(VAULT_FILE, "w", encoding="utf-8") as f:
+        with open(VAULT_FILE, "w", encoding=_UTF8) as f:
             json.dump(vault, f, indent=2)
 
         return key, {}, salt
@@ -229,8 +230,15 @@ def load_vault(master_pw: str) -> Tuple[bytes, Dict[str, str], bytes]:
     # ==============================================================
     # 2. Load existing vault
     # ==============================================================
-    with open(VAULT_FILE, encoding="utf-8") as f:
-        vault: Dict[str, Any] = json.load(f)
+    try:
+        with open(VAULT_FILE, encoding=_UTF8) as f:
+            vault: Dict[str, Any] = json.load(f)
+    except json.JSONDecodeError:
+        msg = "Vault file is not valid JSON or is corrupted!"
+        print(msg)
+        now = pendulum.now().to_iso8601_string()
+        logging.error(f"[{now}] {msg}\n")
+        sys.exit(1)
 
     # Extract and decode stored salt
     try:
@@ -504,7 +512,10 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, salt: bytes, eid
             print("   Account updated")
 
         elif choice == "3":
-            new_pw = ask_password("New password")
+            new_pw = ask_password("New password:")
+            if new_pw is None:
+                continue
+            copy_to_clipboard(new_pw)
             # Keep password history
             pw_history = data.get("password_history", [])
             pw_history.insert(0, {"password" : data.get("password", ""),
@@ -859,9 +870,13 @@ def get_int(prompt: str, default=None):
             return int(val)
         print("   Invalid — numbers only")
 
-def copy_to_clipboard(text: str, timeout: int = 30) -> None:
+def copy_to_clipboard(text: str,
+                       timeout: int = CLIPBOARD_TIMEOUT,
+                         prompt = True) -> None:
     """
     -------------------------------------------------------
+    Promts user if they would like to copy the password to clipboard.
+
     Copies sensitive text (password) to the system clipboard
     and automatically clears it after a timeout for security.
 
@@ -870,7 +885,7 @@ def copy_to_clipboard(text: str, timeout: int = 30) -> None:
 
     Use:
         copy_to_clipboard(password)
-        copy_to_clipboard(password, timeout=15)  # faster clear
+        copy_to_clipboard(password, timeout=15)
         copy_to_clipboard(password, timeout=0)   # do not clear
 
     -------------------------------------------------------
@@ -878,10 +893,11 @@ def copy_to_clipboard(text: str, timeout: int = 30) -> None:
         text     - text to copy (str)
         timeout  - seconds before auto-clear (int)
                    0 or negative = copy only, no auto-clear
+        promt    - prompts user to copy if True (bool)
+                    auto copies if False
 
     Returns:
         None
-
     -------------------------------------------------------
     Behavior:
         • Uses pyperclip.copy() — works on Windows/macOS/Linux
@@ -891,10 +907,13 @@ def copy_to_clipboard(text: str, timeout: int = 30) -> None:
     """
     if not text:
         return
-
+    
+    if prompt and input(" (C)opy to clipboard?:").strip().lower() != "c":
+        return
+    
     # Copy to clipboard
     pyperclip.copy(text)
-    print(f"Password copied! (auto-clears in {timeout}s)", flush=True)
+    print(f" Password copied! (auto-clears in {timeout}s)", flush=True)
 
     if timeout <= 0:
         return
@@ -952,7 +971,7 @@ def clear_clipboard_history(clipboard_length: int = CLIPBOARD_LENGTH):
 
     for i in range(clipboard_length):
         fake_data = ''.join(secrets.choice(char_set) for _ in range(40))
-        fake_data = f"[{i:03d}] {fake_data} - {secrets.token_hex(8)}"
+        fake_data = f"[{i:03d}] {fake_data} - {secrets.token_hex(EID_LEN)}"
 
         pyperclip.copy(fake_data)
         
@@ -1095,35 +1114,37 @@ def random_password(length: int = PASS_DEFAULTS["length"],
 
     return pw
 
-def ask_password(prompt: str = "Password:") -> str:
+def ask_password(prompt: str = "Password:") -> str | None:
     """
     -------------------------------------------------------
-    Prompts the user to provide a password with three options:
-      • Press Enter → manually type a custom password
+    Prompts the user to provide a password with options:
       • Type 'g'    → generate a random password using defaults
       • Type 'c'    → generate a customizable random password
+      • Type 'q' → quit
+      • Press Enter → manually type a custom password
       
     Use:
         pw = ask_password()
-        pw = ask_password("Master password")
+        pw = ask_password("New password:")
     -------------------------------------------------------
     Parameters:
-        prompt - the text displayed above the options menu (str)
+        prompt - A promt to the user (str)
                  Defaults to "Password:"
     Returns:
         str - the final accepted password
+        None - if user quits
     -------------------------------------------------------
     Features:
         • Enforces minimum password length for manual entry
         • Integrates random_password() for strong generation
-        • Optional clipboard copy with auto-clear
-        • Loops until a valid, accepted password is provided
+        • Loops until a valid, password is provided or user quits
     -------------------------------------------------------
     """
     while True:
         print(f"\n{prompt}:")
-        print("  • Type 'g' → generate strong 20-char password")
+        print(f"  • Type 'g' → generate strong {PASS_DEFAULTS["length"]}-char password")
         print("  • Type 'c' → generate customizable random password")
+        print("  • Type 'q' → quit")
         print("  • Press Enter to type your own")
         choice = input(" → ").strip().lower()
 
@@ -1141,8 +1162,6 @@ def ask_password(prompt: str = "Password:") -> str:
             print(f" Generated: {pw}")
             if input("\n Accept this password? (y/n): ").strip().lower() != "y":
                 continue
-            if input(" Copy to clipboard? (y/n): ").strip().lower() == "y":
-                copy_to_clipboard(pw, timeout=CLIPBOARD_TIMEOUT)
             return pw
 
         elif choice == "c":
@@ -1173,9 +1192,9 @@ def ask_password(prompt: str = "Password:") -> str:
             print(f"\n Generated: {pw}")
             if input("\n Accept this password? (y/n): ").strip().lower() != "y":
                 continue
-            if input(" Copy to clipboard? (y/n): ").strip().lower() == "y":
-                copy_to_clipboard(pw, timeout=CLIPBOARD_TIMEOUT)
             return pw
+        elif choice == "q":
+            return None
         else:
             print("Invalid — press Enter, 'g', or 'c'")
 
@@ -1224,7 +1243,7 @@ def export_json(filepath, key, encrypted_entries):
             vault["entries"][eid] = data
 
         # Save to file
-        with open(filepath, "w", encoding="utf-8") as f:
+        with open(filepath, "w", encoding=_UTF8) as f:
             json.dump(vault, f, indent=4)
 
         print("Vault exported successfully.")
@@ -1244,7 +1263,7 @@ def import_exported_json(filepath, encrypted_entries, key, salt):
     """
     try:
         # Load JSON file
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, "r", encoding=_UTF8) as f:
             vault = json.load(f)
 
         imported_count = 0
@@ -1259,9 +1278,9 @@ def import_exported_json(filepath, encrypted_entries, key, salt):
             encrypted_blob = encrypt(plaintext_json, key)
 
             # Generate a new unique ID
-            new_eid = secrets.token_hex(4)
+            new_eid = secrets.token_hex(EID_LEN)
             while new_eid in encrypted_entries:
-                new_eid = secrets.token_hex(4)
+                new_eid = secrets.token_hex(EID_LEN)
 
             # Append into current vault
             encrypted_entries[new_eid] = encrypted_blob
@@ -1284,7 +1303,7 @@ def import_csv(filepath, encrypted_entries, key, salt):
     """
 
     import csv
-    with open(filepath, "r", encoding="utf-8") as f:
+    with open(filepath, "r", encoding=_UTF8) as f:
         delimiter = ','
         print (f"Importing from CSV... Delimiter = '{delimiter}'")
         reader = csv.DictReader(f, delimiter=delimiter)
@@ -1319,9 +1338,9 @@ def import_csv(filepath, encrypted_entries, key, salt):
             encrypted_blob = encrypt(plaintext, key)
 
             # Generate unique entry ID
-            eid = secrets.token_hex(4)
+            eid = secrets.token_hex(EID_LEN)
             while eid in encrypted_entries:
-                eid = secrets.token_hex(4)
+                eid = secrets.token_hex(EID_LEN)
 
             # Save into vault
             encrypted_entries[eid] = encrypted_blob
@@ -1358,6 +1377,10 @@ def main():
             note = get_note_from_user()
 
             password = ask_password("New password")
+            if password is None:
+                continue
+
+            copy_to_clipboard(password)
 
             created_date = pendulum.now().to_iso8601_string()
 
@@ -1373,10 +1396,10 @@ def main():
             
             encrypted_blob = encrypt(entry, key)
             entry = None
-            entry_id = secrets.token_hex(4)
+            entry_id = secrets.token_hex(EID_LEN)
             # Ensure unique ID
             while entry_id in encrypted_entries:
-                entry_id = secrets.token_hex(4)
+                entry_id = secrets.token_hex(EID_LEN)
 
             encrypted_entries[entry_id] = encrypted_blob
             save_vault(encrypted_entries, salt, key)
@@ -1409,7 +1432,7 @@ def main():
                 if choice_2 == "c":
                     entry_data = get_entry_data(encrypted_entries, key, eid)
                     pw = entry_data.get("password", "") if entry_data else ""
-                    copy_to_clipboard(pw, timeout=CLIPBOARD_TIMEOUT)
+                    copy_to_clipboard(pw, timeout=CLIPBOARD_TIMEOUT, prompt=False)
                     pw = None
                     entry_data = None
                     break

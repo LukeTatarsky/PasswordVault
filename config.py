@@ -29,7 +29,7 @@ PASS_DEFAULTS = {
     "avoid_ambiguous": True,         
     "ambiguous_chars": "lI1oO08",
     "symbols_pool":   "!@#()[]|?$%^*_-+.=",
-    "bank_safe_symbols":   "!@#$%^*_-+=",
+    "safe_symbols":   "!@#$&=_-",
 }
 PASSWORD_HISTORY_LIMIT = 5        # Number of previous passwords to keep
 

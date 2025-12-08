@@ -44,9 +44,6 @@ Example `config_local.py`:
 ```python
 from config import PASS_DEFAULTS
 
-# Increase security
-ITERATIONS = 1_200_000
-
 # Longer default passwords
 PASS_DEFAULTS["length"] = 24
 PASS_DEFAULTS["min_symbols"] = 4
