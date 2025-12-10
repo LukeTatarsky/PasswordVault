@@ -1,6 +1,6 @@
 # PasswordVault — Secure Password Manager CLI
 A completely offline, cryptographically secure password manager written in Python.
-Designed with memory safety in mind, single-entry decryption, and automatic clipboard wiping. Includes an integrated password generator that creates strong, truly random passwords using Python’s secrets module.
+Designed with memory safety in mind (python has limitations), single-entry decryption, and automatic clipboard wiping. Includes an integrated password generator that creates strong, truly random passwords using Python’s secrets module.
 
 **Current version: Command-line only, GUI coming later.**
 
