@@ -32,6 +32,7 @@ except ImportError as e:
     missing_package = e.name if hasattr(e, "name") else "unknown package"
     print("Missing required dependency!")
     print(f"  {missing_package} is not installed")
+    logging.error(f"  {missing_package} is not installed")
     print("\nInstall with:")
     print("  pip install -r requirements.txt")
     sys.exit(1)
@@ -77,7 +78,7 @@ sys.excepthook = log_uncaught_exceptions
 # ==============================================================
 # Functions
 # ==============================================================
-def derive_key(pw: str, salt: bytes) -> bytes:
+def derive_key(pw: bytes, salt: bytes) -> bytes:
     """
     -------------------------------------------------------
     Derives a cryptographic key from a password and salt 
@@ -91,7 +92,7 @@ def derive_key(pw: str, salt: bytes) -> bytes:
 
     -------------------------------------------------------
     Parameters:
-        password     - The master password (str)
+        pw           - The master password (bytes)
         salt         - cryptographically random salt, 
                         unique per key (bytes)
 
@@ -100,7 +101,7 @@ def derive_key(pw: str, salt: bytes) -> bytes:
     -------------------------------------------------------
     """
     key = hash_secret_raw(
-        secret=pw.encode(),
+        secret=pw,
         salt=salt,
         time_cost=ARGON_TIME,
         memory_cost=ARGON_MEMORY,
@@ -238,6 +239,7 @@ def load_vault(master_pw: str) -> Tuple[bytes, Dict[str, str], bytes]:
         print(msg)
         now = pendulum.now().to_iso8601_string()
         logging.error(f"[{now}] {msg}\n")
+        time.sleep(2) 
         sys.exit(1)
 
     # Extract and decode stored salt
@@ -246,6 +248,7 @@ def load_vault(master_pw: str) -> Tuple[bytes, Dict[str, str], bytes]:
     except (KeyError, base64.binascii.Error):
         msg = "Vault is corrupted: missing or invalid salt!"
         print(msg)
+        time.sleep(3)
         now = pendulum.now().to_iso8601_string()
         logging.error(f"[{now}] {msg}\n")
         sys.exit(1)
@@ -265,15 +268,18 @@ def load_vault(master_pw: str) -> Tuple[bytes, Dict[str, str], bytes]:
 
     try:
         decrypted_canary = decrypt(vault["canary"], key)
+
         if decrypted_canary != KEY_CHECK_STRING:
             msg = "Wrong master password!"
             print(msg)
             now = pendulum.now().to_iso8601_string()
             logging.error(f"[{now}] {msg}\n")
+            time.sleep(3)
             sys.exit(1)
     except InvalidToken:
         msg = "Wrong master password or vault is corrupted!"
         print(msg)
+        time.sleep(3)
         now = pendulum.now().to_iso8601_string()
         logging.error(f"[{now}] {msg}\n")
         sys.exit(1)
@@ -326,9 +332,12 @@ def save_vault(encrypted_entries: dict[str, str], salt: bytes, key: bytes) -> No
     os.replace(tmp, VAULT_FILE)
     return
 
-def display_entry(source: Dict[str, Any], key: bytes | None = None,
+def display_entry(source: Dict[str, Any], 
+    key: bytes | None = None,
     eid: str | None = None,  *,
-    show_pass: bool = False, show_history: bool = False) -> int: 
+    show_pass: bool = False, 
+    show_history: bool = False, 
+    show_all: bool = False) -> int: 
     # note: * enforces that everything afterwards is called by name (no positional args)
     """
     -------------------------------------------------------
@@ -358,9 +367,11 @@ def display_entry(source: Dict[str, Any], key: bytes | None = None,
                          Omit when source is already decrypted
         eid           - entry ID to look up (str)
                          Omit when source is already decrypted
-        show_pass - if True, reveals plaintext password
+        show_pass -     if True, reveals plaintext password
                         if False, masks with asterisks (bool)
-        show_history - if True, show password history (bool)
+        show_history -  if True, show password history (bool)
+
+        show_all -      if True, shows everything (bool)
 
     Returns:
         int - 0 on success
@@ -381,20 +392,20 @@ def display_entry(source: Dict[str, Any], key: bytes | None = None,
         data = source
         if not data:
             return 1
-
-    print(f"\nSite         : {data.get('site', '(missing)')}")
+    print(f"\nEntry ID     : {eid}")
+    print(f"Site         : {data.get('site', '(missing)')}")
     print(f"Account      : {data.get('account') or ''}")
 
     # === Password (masked or revealed) ====================================
     password = data.get('password', '') or ''
-    if show_pass:
+    if show_pass or show_all:
         print(f"Password     : {password}")
     else:
         masked = '*' * PASS_DEFAULTS["length"] if password else ''
         print(f"Password     : {masked}")
 
     # === Password History (only if requested and exists) ==================
-    if show_history and data.get('password_history'):
+    if show_history or show_all: 
         history = data.get('password_history', [])
         if history:
             print(f"Pass History : ")
@@ -411,6 +422,19 @@ def display_entry(source: Dict[str, Any], key: bytes | None = None,
         print("-" * 40)
         print(note)
         print("-" * 40)
+
+    # === Keys =============================================================
+    keys = data.get('keys', '')
+    if show_all:
+        print("Keys         :")
+        if keys:
+            print("-" * 40)
+            print(keys)
+            print("-" * 40)
+    else:
+        if keys:
+            print(f"Keys         : {"*" * 10}")
+    keys = None
     # === Timestamps =======================================================
     try:
         created = pendulum.parse(data.get('created_date', '1970-01-01T00:00:00Z'))
@@ -432,7 +456,7 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, salt: bytes, eid
 
     Loads and decrypts the specified entry, then presents a
     menu allowing the user to:
-      • Edit site, account, password, or note
+      • Edit site, account, password, etc..
       • View current entry
       • Save changes with updated timestamp
       • Delete the entry permanently
@@ -463,12 +487,13 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, salt: bytes, eid
         2. Edit Account       6. Save & Exit
         3. Edit Password      7. Delete Entry
         4. Edit Note          8. Cancel (discard changes)
+        9. Edit Keys
     -------------------------------------------------------
     Security features:
         • Requires explicit confirmation ('s' or 'del')
         • Site cannot be empty
         • Timestamp automatically updated on save
-        • Maintains password history (last 10)
+        • Maintains password history (configurable)
     -------------------------------------------------------
     """
     if eid not in encrypted_entries:
@@ -489,10 +514,11 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, salt: bytes, eid
 
     while True:
         print("\nWhat would you like to do?")
-        print("   1. Edit Site          5. Display Entry (incl pass)")
+        print("   1. Edit Site          5. Display Entry (shows all)")
         print("   2. Edit Account       6. Save & Exit")
         print("   3. Edit Password      7. Delete Entry")
         print("   4. Edit Note          8. Cancel (discard changes)")
+        print("   9. Edit Recovery Keys ")
         
         choice = input("\n → ").strip()
 
@@ -521,8 +547,8 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, salt: bytes, eid
             pw_history.insert(0, {"password" : data.get("password", ""),
                                 "last_used" : pendulum.now().to_iso8601_string()})
             data["password_history"] = pw_history[:PASSWORD_HISTORY_LIMIT]
-
             data["password"] = new_pw
+            new_pw = None
             print("   Password updated")
 
         elif choice == "4":
@@ -532,10 +558,11 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, salt: bytes, eid
             print("-" * 40)
             note = get_note_from_user()
             data["note"] = note
+            note = None
             print("   Note updated")
 
         elif choice == "5":
-            display_entry(data, show_pass=True)
+            display_entry(data, show_all=True)
 
         elif choice == "6":
             if data.get("site", "").strip() == "":
@@ -573,9 +600,19 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, salt: bytes, eid
             print("All changes discarded.")
             data = None
             return 0
+        
+        elif choice == "9":
+            print ("\nCurrent Keys:")
+            print("-" * 40)
+            print(data.get("keys", "")) 
+            print("-" * 40)
+            keys = get_note_from_user(prompt="Enter Recovery Keys:")
+            data["keys"] = keys
+            keys = None
+            print("   Keys updated")
 
         else:
-            print("   Invalid option — choose 1–8")
+            print("   Invalid option — choose 1–9")
 
 
 def list_entries(encrypted_entries: dict[str, str], key: bytes,
@@ -714,54 +751,63 @@ def change_master_password() -> None:
     """
     print("\n=== Change Master Password ===")
 
-    old_pw = getpass.getpass("Current master password: ").strip()
-    new_pw = getpass.getpass("New master password: ").strip()
-    confirm = getpass.getpass("Confirm new master password: ").strip()
-
-    if new_pw != confirm:
-        print("New passwords do not match!")
-        return
-    if not new_pw:
-        print("Master password cannot be empty!")
-        return
-
-    # 1. Try to load with the old password (this also verifies it)
+    old_pw = getpass.getpass("Current master password: ").encode(_UTF8)
+    new_pw = getpass.getpass("New master password: ").encode(_UTF8)
+    confirm = getpass.getpass("Confirm new master password: ").encode(_UTF8)
     try:
-        temp_key, temp_entries, _ = load_vault(old_pw)
-    except SystemExit:
-        print("Wrong current password!")
-        return
+        if new_pw != confirm:
+            print("New passwords do not match!")
+            return
+        if not new_pw:
+            print("Master password cannot be empty!")
+            return
 
-    print("Current password verified. Re-encrypting all entries...")
-
-    # 2. Derive a new salt and key from the new password
-    new_salt = os.urandom(16)
-    new_key = derive_key(new_pw, new_salt)
-
-    # 3. Decrypt and re-encrypt every entry with the new key
-    new_encrypted_entries: Dict[str, str] = {}
-    for eid, old_blob in temp_entries.items():
+        # 1. Try to load with the old password (this also verifies it)
         try:
-            # Decrypt with old key
-            plaintext = decrypt(old_blob, temp_key)
-            # Encrypt again with new key
-            new_blob = encrypt(plaintext, new_key)
-            plaintext = None
-            new_encrypted_entries[eid] = new_blob
-        except InvalidToken:
-            print(f"\nFailed to decrypt entry {eid}")
-            print("Aborting password change.")
+            temp_key, temp_entries, _ = load_vault(old_pw)
+        except SystemExit:
             return
-        except Exception as e:
-            print(f"\nFailed to re-encrypt entry {eid}: {e}")
-            print("Aborting password change.")
-            return
-        finally:
-            plaintext = None
 
-    # 4. Save with the new salt and new encrypted blobs
-    save_vault(new_encrypted_entries, new_salt, new_key)
-    print("Master password changed successfully!")
+        print("Current password verified. Re-encrypting all entries...")
+
+        # 2. Derive a new salt and key from the new password
+        new_salt = os.urandom(16)
+        new_key = derive_key(new_pw, new_salt)
+
+        # 3. Decrypt and re-encrypt every entry with the new key
+        new_encrypted_entries: Dict[str, str] = {}
+        for eid, old_blob in temp_entries.items():
+            try:
+                # Decrypt with old key
+                plaintext = decrypt(old_blob, temp_key)
+                # Encrypt again with new key
+                new_blob = encrypt(plaintext, new_key)
+                plaintext = None
+                new_encrypted_entries[eid] = new_blob
+            except InvalidToken:
+                print(f"\nFailed to decrypt entry {eid}")
+                print("Aborting password change.")
+                return
+            except Exception as e:
+                print(f"\nFailed to re-encrypt entry {eid}: {e}")
+                print("Aborting password change.")
+                return
+            finally:
+                plaintext = None
+        # 4. Save with the new salt and new encrypted blobs
+        save_vault(new_encrypted_entries, new_salt, new_key)
+        print("Master password changed successfully!")
+    finally:
+        old_pw = secrets.token_bytes(len(old_pw))
+        new_pw = secrets.token_bytes(len(new_pw))
+        confirm = secrets.token_bytes(len(confirm))
+        old_pw = b"\x00" * len(old_pw)
+        new_pw = b"\x00" * len(new_pw)
+        confirm = b"\x00" * len(confirm)
+        del old_pw, new_pw, confirm
+        print("Exiting...")
+        time.sleep(2)
+        sys.exit(0)
     return
 
 def delete_corrupted_entry(encrypted_entries: dict[str, str],
@@ -981,7 +1027,7 @@ def clear_clipboard_history(clipboard_length: int = CLIPBOARD_LENGTH):
     pyperclip.copy("Clipboard history cleared")
     return
 
-def get_note_from_user() -> str:
+def get_note_from_user(prompt: str = "Enter note:") -> str:
     """
     -------------------------------------------------------
     Interactively prompts the user to enter a multi-line note.
@@ -994,7 +1040,7 @@ def get_note_from_user() -> str:
 
     -------------------------------------------------------
     Parameters:
-        None
+        prompt - A promt to the user (str)
 
     Returns:
         str - the complete note text with preserved line breaks
@@ -1002,7 +1048,7 @@ def get_note_from_user() -> str:
 
     -------------------------------------------------------
     """
-    print("Enter note (Enter 3x to end note or 1x to leave empty):")
+    print(f"{prompt} (Enter 3x to end or 1x to leave empty)")
     note = ""
     consecutive_empty = 0
 
@@ -1355,9 +1401,14 @@ def import_csv(filepath, encrypted_entries, key, salt):
 # MAIN
 # ==============================================================
 def main():
-    print("- Ultimate Password Manager —\n")
-    master_pw = getpass.getpass("Master password: ").strip()
+    print("- Password Manager —\n")
+    master_pw = getpass.getpass("Master password: ").encode(_UTF8)
     key, encrypted_entries, salt = load_vault(master_pw)
+    # Overwrite, clear, and delete.
+    # Python limitation, there is no way to achieve memory wiping.
+    master_pw = secrets.token_bytes(len(master_pw))
+    master_pw = b"\x00" * len(master_pw)
+    del master_pw
     # clears clipboard on exit
     atexit.register(clear_clipboard_history)
 
@@ -1389,6 +1440,7 @@ def main():
                                 "account": account,
                                 "password": password,
                                 "note": note,
+                                "keys": "",
                                 "created_date": created_date,
                                 "edited_date": created_date,
                                 "password_history": []}, separators=(',', ':'),
@@ -1413,19 +1465,8 @@ def main():
             if res != 0:
                 continue
 
-            password_shown = False
-            history_shown = False
-
             while True:
-                if not password_shown and not history_shown:
-                    action = "(C)opy password  (S)how password (H)istory  (Enter) skip"
-                elif history_shown and not password_shown:
-                    action = "(C)opy password  (S)how password (Enter) continue"
-                elif password_shown and not history_shown:
-                    action = "(C)opy password  (H)istory (Enter) continue"
-                else:
-                    action = "(C)opy password  (Enter) continue"
-
+                action = "(C)-Copy Password  (S)-Show Password  (H)-Password History  (A)-Show All  (Enter)-Skip"
                 print(f"{action}\n", end="> ", flush=True)
                 choice_2 = input().strip().lower()
 
@@ -1437,7 +1478,7 @@ def main():
                     entry_data = None
                     break
 
-                elif choice_2 == "s" and not password_shown:
+                elif choice_2 == "s":
                     res = display_entry(encrypted_entries,
                         key,
                         eid,
@@ -1446,9 +1487,8 @@ def main():
                     )
                     if res != 0:
                         continue
-                    password_shown = True
 
-                elif choice_2 == "h" and not history_shown:
+                elif choice_2 == "h":
                     res = display_entry(
                         encrypted_entries,
                         key,
@@ -1458,13 +1498,22 @@ def main():
                     )
                     if res != 0:
                         continue
-                    history_shown = True
+                    
+                elif choice_2 == "a":
+                    res = display_entry(
+                        encrypted_entries,
+                        key,
+                        eid,
+                        show_all=True
+                    )
+                    if res != 0:
+                        continue
 
                 elif choice_2 in {"", "enter", "q"}:
                     break
 
                 else:
-                    print("\rInvalid — use C, S, H or Enter", flush=True)
+                    print("\rInvalid — use C, S, H, A or Enter", flush=True)
                     time.sleep(0.5)
         
         # == EDIT ENTRY =======================================
@@ -1506,6 +1555,8 @@ def main():
             filename = input("Enter JSON filename to import: ").strip()
             import_exported_json(f"{filename}.json", encrypted_entries, key, salt)
 
+        else:
+            print("Invalid Choice")
 
 if __name__ == "__main__":
     main()
