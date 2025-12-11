@@ -45,7 +45,7 @@ CLIPBOARD_LENGTH = 80                # Number of entries to flood
 # ──────────────────────────────────────────────────────────────
 DT_FORMAT = "MMM D, YYYY hh:mm:ss A"
 DT_FORMAT_PASS_HISTORY = "MMM D, YY"
-
+CLEAR_SCREEN = True
 # ──────────────────────────────────────────────────────────────
 # Optional: local overrides
 # Local configuration file overrides standard config values

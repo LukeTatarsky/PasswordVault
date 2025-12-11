@@ -3,6 +3,7 @@ password_vault*.json
 *.pyc
 __pycache__/
 .vscode/
+.idea/
 tests/
 t3sting/
 testing/

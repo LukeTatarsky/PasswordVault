@@ -17,6 +17,7 @@ import re
 import base64
 import traceback
 import logging
+import gc
 from typing import Dict, Any, Tuple, Final
 
 # ==============================================================
@@ -25,6 +26,7 @@ from typing import Dict, Any, Tuple, Final
 try:
     import pyperclip
     import pendulum
+    import pyotp
     from config import *
     from cryptography.fernet import Fernet, InvalidToken
     from argon2.low_level import hash_secret_raw, Type
@@ -42,6 +44,12 @@ except ImportError as e:
 _UTF8: Final = "utf-8"
 # length of eid (hex)
 EID_LEN = 4 
+# length of visible name when displaying entries
+SITE_LEN = 15
+ACCOUNT_LEN = 22
+# separator
+SEP_LG= "="*50
+SEP_SM = "-"*50
 # ==============================================================
 # Logging
 # ==============================================================
@@ -350,7 +358,7 @@ def display_entry(source: Dict[str, Any],
 
     Use:
         Mode 1)
-        display_entry(encrypted_entries, key, "github")
+        display_entry(encrypted_entries, key, "722ccdd7")
 
         Mode 2) 
         display_entry(current_data)   
@@ -390,63 +398,81 @@ def display_entry(source: Dict[str, Any],
     else:
         # Mode 2: Display already-decrypted in-memory dict
         data = source
+        source = secrets.token_bytes(len(source))
+        del source
         if not data:
             return 1
-    print(f"\nEntry ID     : {eid}")
+
+    print(f"\n{SEP_LG}")
     print(f"Site         : {data.get('site', '(missing)')}")
-    print(f"Account      : {data.get('account') or ''}")
+    # === Account ==========================================================
+    account = data.get('account') or ''
+    if account:
+        print(f"Account      : {account}")
+    account = secrets.token_bytes(len(account))
+    del account
 
     # === Password (masked or revealed) ====================================
     password = data.get('password', '') or ''
     if show_pass or show_all:
         print(f"Password     : {password}")
-    else:
-        masked = '*' * PASS_DEFAULTS["length"] if password else ''
+    elif password:
+        masked = '*' * PASS_DEFAULTS["length"]
         print(f"Password     : {masked}")
-
+    password = secrets.token_bytes(len(password))
+    del password
     # === Password History (only if requested and exists) ==================
     if show_history or show_all: 
         history = data.get('password_history', [])
         if history:
             print(f"Pass History : ")
-            print(f" - Last used :")
+            print(f" - Last Used :")
             for pw_entry in history:
                 print(f" - {pendulum.parse(pw_entry.get('last_used','unknown date'))
                             .in_timezone('local').format(DT_FORMAT_PASS_HISTORY)} :",
                     f" {pw_entry.get('password','')}")
-    
+                pw_entry.clear()
+                del pw_entry
+            history.clear()
+            del history
+            print(SEP_SM)
     # === Note =============================================================
-    print("Note         :")
     note = data.get('note', '').strip()
     if note:
-        print("-" * 40)
-        print(note)
-        print("-" * 40)
-
-    # === Keys =============================================================
+        print("Note")
+        print(f"{SEP_SM}\n{note}\n{SEP_SM}")
+        del note
+    # === Recovery Keys =====================================================
     keys = data.get('keys', '')
-    if show_all:
-        print("Keys         :")
-        if keys:
-            print("-" * 40)
-            print(keys)
-            print("-" * 40)
-    else:
-        if keys:
+    if show_all and keys:
+        print("Keys")
+        print(f"{SEP_SM}\n{keys}\n{SEP_SM}")
+    elif keys:
             print(f"Keys         : {"*" * 10}")
-    keys = None
+    keys = secrets.token_bytes(len(keys))
+    del keys
+    # === TOTP Key ==========================================================
+    totp = data.get('totp', '')
+    if show_all and totp:
+        print(f"TOTP         : {totp}")
+    elif totp:
+        print(f"TOTP         : {"*" * 10}")
+    totp = secrets.token_bytes(len(totp))
+    del totp
     # === Timestamps =======================================================
     try:
         created = pendulum.parse(data.get('created_date', '1970-01-01T00:00:00Z'))
         edited = pendulum.parse(data.get('edited_date', '1970-01-01T00:00:00Z'))
     except Exception:
         created = edited = pendulum.now()
-    finally:
-        data = None
+    # finally:
+    #     data.clear()
+    #     data = secrets.token_bytes(len(data))
+    #     del data
     
     print(f"Created      : {created.in_timezone('local').format(DT_FORMAT)}")
-    print(f"Last Edited  : {edited.in_timezone('local').format(DT_FORMAT)}\n")
-    data = None
+    print(f"Last Edited  : {edited.in_timezone('local').format(DT_FORMAT)}")
+    print(SEP_LG)
     return 0
 
 def update_entry(encrypted_entries: dict[str, str], key: bytes, salt: bytes, eid: str) -> int:
@@ -513,12 +539,17 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, salt: bytes, eid
     display_entry(data, None, None, show_pass=False)
 
     while True:
-        print("\nWhat would you like to do?")
-        print("   1. Edit Site          5. Display Entry (shows all)")
-        print("   2. Edit Account       6. Save & Exit")
-        print("   3. Edit Password      7. Delete Entry")
-        print("   4. Edit Note          8. Cancel (discard changes)")
-        print("   9. Edit Recovery Keys ")
+        gc.collect()
+        
+        print(
+            f"\n--- Editing Menu --- \n"
+            f"   1. Edit Site          5. Display Entry (shows all) \n"
+            f"   2. Edit Account       6. Save & Exit \n"
+            f"   3. Edit Password      7. Delete Entry \n"
+            f"   4. Edit Note          8. Cancel (discard changes) \n"
+            f"   9. Edit Recovery Keys \n"
+            f"   0. Edit TOTP Key"
+            )
         
         choice = input("\n → ").strip()
 
@@ -530,11 +561,13 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, salt: bytes, eid
                 print("   Site updated")
             else:
                 print("   Site unchanged")
+            del new_site
 
         elif choice == "2":
             current = data.get('account') or ''
             new_acc = input(f"New account [{current}]: ").strip()
             data["account"] = new_acc or ''
+            del new_acc
             print("   Account updated")
 
         elif choice == "3":
@@ -548,17 +581,21 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, salt: bytes, eid
                                 "last_used" : pendulum.now().to_iso8601_string()})
             data["password_history"] = pw_history[:PASSWORD_HISTORY_LIMIT]
             data["password"] = new_pw
+            pw_history.clear()
+            del pw_history
             new_pw = None
+            del new_pw
             print("   Password updated")
 
         elif choice == "4":
             print ("\nCurrent note:")
-            print("-" * 40)
+            print(SEP_SM)
             print(data.get("note", "")) 
-            print("-" * 40)
+            print(SEP_SM)
             note = get_note_from_user()
             data["note"] = note
             note = None
+            del note
             print("   Note updated")
 
         elif choice == "5":
@@ -574,7 +611,7 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, salt: bytes, eid
                 print("   Save cancelled")
                 continue
 
-            # Update timestamp
+            # Update timestamp5
             data["edited_date"] = pendulum.now().to_iso8601_string()
 
             # Re-encrypt and save
@@ -582,7 +619,9 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, salt: bytes, eid
             encrypted_entries[eid] = blob
             save_vault(encrypted_entries, salt, key)
             print("\nEntry updated and saved successfully!")
+            data.clear()
             data = None
+            del data
             return 0
 
         elif choice == "7":
@@ -591,32 +630,47 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, salt: bytes, eid
                 del encrypted_entries[eid]
                 save_vault(encrypted_entries, salt, key)
                 print("Entry deleted.")
+                data.clear()
                 data = None
+                del data
                 return 0
             else:
                 print("   Delete cancelled")
             
         elif choice == "8":
             print("All changes discarded.")
+            data.clear()
             data = None
+            del data
             return 0
         
         elif choice == "9":
             print ("\nCurrent Keys:")
-            print("-" * 40)
+            print(SEP_SM)
             print(data.get("keys", "")) 
-            print("-" * 40)
+            print(SEP_SM)
             keys = get_note_from_user(prompt="Enter Recovery Keys:")
             data["keys"] = keys
             keys = None
+            del keys
             print("   Keys updated")
 
-        else:
-            print("   Invalid option — choose 1–9")
+        elif choice == "0":
+            print ("\nCurrent TOTP code:")
+            print(SEP_SM)
+            print(data.get("totp", "")) 
+            print(SEP_SM)
+            totp = input("Enter TOTP Generator Key: ").strip()
+            data["totp"] = totp
+            totp = None
+            print("   TOTP updated")
 
+        else:
+            print("   Invalid option — choose 0-9")
+        
 
 def list_entries(encrypted_entries: dict[str, str], key: bytes,
-                  query: str = None) -> None:
+                  query: str = None) -> list[str]:
     """
     -------------------------------------------------------
     Lists all vault entries — with optional search filtering.
@@ -641,15 +695,15 @@ def list_entries(encrypted_entries: dict[str, str], key: bytes,
                             • str   = filter results
 
     Returns:
-        None
+        sorted_entries
     -------------------------------------------------------
     Output example:
         Your entries:
                 ID →              Site Account
             ----------------------------------------
-            73173e6c →     [corrupted]
-            b074ec2e →          github 23
-            e48179d8 →           gmail user41
+                1 →     [corrupted]
+                2 →          github 23
+                3 →           gmail user41
     -------------------------------------------------------
     Features:
         • Full-text search across site, account, and note
@@ -669,9 +723,11 @@ def list_entries(encrypted_entries: dict[str, str], key: bytes,
     for eid, blob in encrypted_entries.items():
         try:
             data = json.loads(decrypt(blob, key))
-            site = data.get("site", "(no site)")
+            site = data.get("site", "")
             account = data.get("account", "")
             note = data.get("note", "")
+            data.clear()
+            del data
 
             # Build searchable text
             searchable_str = " ".join([site, account, note]).lower()
@@ -684,18 +740,17 @@ def list_entries(encrypted_entries: dict[str, str], key: bytes,
                 # Keep entry only if ALL words appear somewhere
                 if not all(term in searchable_str for term in terms):
                     continue
-
+    
             display_data[eid] = (site, account)
+            del searchable_str, note, account, site
 
         except Exception:
             # only show corrupted if not searching
             if not query:
                 display_data[eid] = ("corrupted", "")
-        finally:
-            data = None
 
     if not display_data:
-        print("  No entries found." + (" (try different term)" if query else ""))
+        print("  No entries found.")
         return
     
     # Sort by site , then account
@@ -703,19 +758,25 @@ def list_entries(encrypted_entries: dict[str, str], key: bytes,
         display_data.items(),
         key=lambda entry: (entry[1][0].lower(), entry[1][1].lower() or "")
     )
+    display_data.clear()
+    del display_data
 
-    print("\nYour entries:")
-    print (f"{'ID':>8} → {'Site':>15}  Account")
-    print("-" * 40)
+    print(SEP_SM)
+    print (f" {'Entry':>5}   → {'Site':^{SITE_LEN}}  {'Account':^{ACCOUNT_LEN}}")
+    print(SEP_SM)
 
+    i = 0
     for eid, (site, account) in sorted_entries:
-        print(f"{eid:>8} → {site:>15}  {account}")
+        site = site if len(site) <= SITE_LEN else site[:SITE_LEN-3] + "..."
+        account = account if len(account) <= ACCOUNT_LEN else account[:ACCOUNT_LEN-3] + "..."
+        # Print starting at 1 for ease of use. Subtract 1 when calling display
+        print(f"{i+1:>6}   → {site:^{SITE_LEN}}  {account:^{ACCOUNT_LEN}}")
+        # Only return a list of eid's
+        sorted_entries[i] = eid
+        i+=1
+        del site, account
 
-    # Clear temp
-    data = None
-    display_data = {}
-    sorted_entries = {}
-    return
+    return sorted_entries
 
 def change_master_password() -> None:
     """
@@ -801,9 +862,6 @@ def change_master_password() -> None:
         old_pw = secrets.token_bytes(len(old_pw))
         new_pw = secrets.token_bytes(len(new_pw))
         confirm = secrets.token_bytes(len(confirm))
-        old_pw = b"\x00" * len(old_pw)
-        new_pw = b"\x00" * len(new_pw)
-        confirm = b"\x00" * len(confirm)
         del old_pw, new_pw, confirm
         print("Exiting...")
         time.sleep(2)
@@ -952,6 +1010,7 @@ def copy_to_clipboard(text: str,
     -------------------------------------------------------
     """
     if not text:
+        print(" Nothing to copy.")
         return
     
     if prompt and input(" (C)opy to clipboard?:").strip().lower() != "c":
@@ -959,7 +1018,8 @@ def copy_to_clipboard(text: str,
     
     # Copy to clipboard
     pyperclip.copy(text)
-    print(f" Password copied! (auto-clears in {timeout}s)", flush=True)
+    text = " Copied!" + (f"(auto-clears in {timeout}s)" if timeout > 0 else "")
+    print(text, flush=True)
 
     if timeout <= 0:
         return
@@ -1244,6 +1304,51 @@ def ask_password(prompt: str = "Password:") -> str | None:
         else:
             print("Invalid — press Enter, 'g', or 'c'")
 
+def show_totp_code(totp_key, interval=30) -> None:
+    """
+    -------------------------------------------------------
+    Prompts the user to provide a password with options:
+      • Type 'g'    → generate a random password using defaults
+      • Type 'c'    → generate a customizable random password
+      • Type 'q' → quit
+      • Press Enter → manually type a custom password
+      
+    Use:
+        show_totp_code(totp_key)
+    -------------------------------------------------------
+    Parameters:
+        prompt - A promt to the user (str)
+                 Defaults to "Password:"
+    Returns:
+        None
+    -------------------------------------------------------
+    """
+    
+    try:
+        totp = pyotp.TOTP(totp_key)
+        print("Generator started. Ctrl + C to stop.\n")
+        current_code = totp.now()
+        while (True):
+            if not totp.verify(current_code):
+                current_code = totp.now()
+            remaining = interval - (int(time.time()) % interval)
+            line = f"\r One-time password code: " \
+                    f"{current_code[:len(current_code)//2]} {current_code[len(current_code)//2:]}" \
+                    f"  (refreshes in {remaining:2d}s)"
+            
+            print(line, end="", flush=True)
+            time.sleep(1)
+
+    except KeyboardInterrupt:
+        print("\n Stopped.")
+    except Exception as e:
+        print(f"Error: {e}")
+        logging.error(f"TOTP Error: {e}")
+    finally:
+        totp_key = secrets.token_bytes(len(totp_key))
+        del totp_key
+
+    return
 
 def export_json(filepath, key, encrypted_entries):
     """
@@ -1395,7 +1500,9 @@ def import_csv(filepath, encrypted_entries, key, salt):
     print(f"Imported {imported_count} entries from CSV.")
     return True
 
-
+def wipe_terminal():
+    # Wipes terminal screen (works on Windows, macOS, Linux)
+    os.system('cls' if os.name == 'nt' else 'clear')
 
 # ==============================================================
 # MAIN
@@ -1404,17 +1511,23 @@ def main():
     print("- Password Manager —\n")
     master_pw = getpass.getpass("Master password: ").encode(_UTF8)
     key, encrypted_entries, salt = load_vault(master_pw)
-    # Overwrite, clear, and delete.
-    # Python limitation, there is no way to achieve memory wiping.
+
+    # Best effort to clear Strings. Python Strings are imutable.
     master_pw = secrets.token_bytes(len(master_pw))
     master_pw = b"\x00" * len(master_pw)
     del master_pw
+
     # clears clipboard on exit
     atexit.register(clear_clipboard_history)
 
     while True:
-        print("\n1. Add   2. Get   3. Edit   4. List Sites   5. Search  6. Change Master PW   7. Quit")
-        choice = input("> ").strip()
+        gc.collect()
+
+        if CLEAR_SCREEN:
+            wipe_terminal()
+        print("\n--- Main Menu ---")
+        print("\n 1) Add   2) Get   6) Change Master PW   7) Quit")
+        choice = input(" > ").strip()
 
         # == ADD ENTRY =====================================
         if choice == "1":
@@ -1430,8 +1543,8 @@ def main():
             password = ask_password("New password")
             if password is None:
                 continue
-
-            copy_to_clipboard(password)
+            if password:
+                copy_to_clipboard(password)
 
             created_date = pendulum.now().to_iso8601_string()
 
@@ -1443,11 +1556,19 @@ def main():
                                 "keys": "",
                                 "created_date": created_date,
                                 "edited_date": created_date,
-                                "password_history": []}, separators=(',', ':'),
+                                "password_history": [],
+                                "totp": ""}, separators=(',', ':'),
                                 )
             
             encrypted_blob = encrypt(entry, key)
+
             entry = None
+            note = None
+            password = None
+            site = None
+            account = None
+            del entry, note, password, site, account
+
             entry_id = secrets.token_hex(EID_LEN)
             # Ensure unique ID
             while entry_id in encrypted_entries:
@@ -1459,25 +1580,56 @@ def main():
 
         # == GET ENTRY =======================================
         elif choice == "2":
-            eid = input("Enter ID: ").strip().lower()
+            print(f"Retrieve a list of entries that match query. " 
+                f"Multiple words accepted. "
+                f"Enter to show all.")
+            query = input("\n Enter search term: ").strip().lower()
+            entries = list_entries(encrypted_entries, key, query)
 
+
+            if not entries:
+                continue 
+
+            selection = get_int("\n Select entry: ", default=0)
+            
+            if selection > len(entries) or selection < 1:
+                print (" Invalid selection.")
+                continue
+            eid = entries[selection - 1]
             res = display_entry(encrypted_entries, key, eid)
             if res != 0:
                 continue
 
             while True:
-                action = "(C)-Copy Password  (S)-Show Password  (H)-Password History  (A)-Show All  (Enter)-Skip"
-                print(f"{action}\n", end="> ", flush=True)
+                
+                print(f"\n--- Entry Menu ---\n"
+                      f"(C) Copy Password    (U) Copy Account\n"
+                      f"(S) Show Password    (H) Password History \n"
+                      f"(A) Show All         (T) Get TOTP Code \n"
+                      f"(E) Edit Entry       (Enter) Main Menu \n"
+                      ,end="\n > ")
                 choice_2 = input().strip().lower()
 
+                # == COPY PASSWORD ===================================
+                if choice_2 == "u":
+                    entry_data = get_entry_data(encrypted_entries, key, eid)
+                    user = entry_data.get("account", "") if entry_data else ""
+                    copy_to_clipboard(user, timeout=0, prompt=False)
+                    user = None
+                    entry_data = None
+                    del entry_data
+                    continue
+
+                # == COPY PASSWORD ===================================
                 if choice_2 == "c":
                     entry_data = get_entry_data(encrypted_entries, key, eid)
                     pw = entry_data.get("password", "") if entry_data else ""
                     copy_to_clipboard(pw, timeout=CLIPBOARD_TIMEOUT, prompt=False)
                     pw = None
                     entry_data = None
-                    break
-
+                    continue
+                
+                # == SHOW PASSWORD ===================================
                 elif choice_2 == "s":
                     res = display_entry(encrypted_entries,
                         key,
@@ -1488,6 +1640,7 @@ def main():
                     if res != 0:
                         continue
 
+                # == SHOW PASSWORD HISTORY ============================
                 elif choice_2 == "h":
                     res = display_entry(
                         encrypted_entries,
@@ -1498,7 +1651,8 @@ def main():
                     )
                     if res != 0:
                         continue
-                    
+
+                # == SHOW COMPLETE ENTRY ==============================
                 elif choice_2 == "a":
                     res = display_entry(
                         encrypted_entries,
@@ -1508,27 +1662,28 @@ def main():
                     )
                     if res != 0:
                         continue
-
+                
+                # == GET TOTP CODE ==============================
+                elif choice_2 == "t":
+                    totp_key = get_entry_data(encrypted_entries, key, eid).get("totp")
+                    if totp_key:
+                        show_totp_code(totp_key)
+                    else:
+                        print("No TOTP key available.")
+                    totp_key = None
+                
+                # == EDIT ENTRY =======================================
+                elif choice_2 == "e":
+                    res = update_entry(encrypted_entries, key, salt, eid)
+                    if res == 0:
+                        break
+                    
                 elif choice_2 in {"", "enter", "q"}:
                     break
 
                 else:
-                    print("\rInvalid — use C, S, H, A or Enter", flush=True)
+                    print("\rInvalid Choice\n", flush=True)
                     time.sleep(0.5)
-        
-        # == EDIT ENTRY =======================================
-        elif choice == "3":
-            eid = input("Enter ID: ").strip().lower()
-            update_entry(encrypted_entries, key, salt, eid)
-
-        # == LIST SITES =========================================
-        elif choice == "4":
-            list_entries(encrypted_entries, key)
-
-        # == SEARCH =============================================
-        elif choice == "5":
-            query = input("Enter search term: ").strip().lower()
-            list_entries(encrypted_entries, key, query)
 
         # == CHANGE MASTER PW ===================================
         elif choice == "6":
