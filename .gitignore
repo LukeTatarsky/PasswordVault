@@ -1,5 +1,6 @@
 # gitignore
 password_vault*.json
+password_vault*
 *.pyc
 __pycache__/
 .vscode/

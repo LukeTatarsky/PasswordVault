@@ -37,6 +37,7 @@ except ImportError as e:
     logging.error(f"  {missing_package} is not installed")
     print("\nInstall with:")
     print("  pip install -r requirements.txt")
+    time.sleep(2)
     sys.exit(1)
 # ==============================================================
 # System Constants
@@ -465,10 +466,7 @@ def display_entry(source: Dict[str, Any],
         edited = pendulum.parse(data.get('edited_date', '1970-01-01T00:00:00Z'))
     except Exception:
         created = edited = pendulum.now()
-    # finally:
-    #     data.clear()
-    #     data = secrets.token_bytes(len(data))
-    #     del data
+
     
     print(f"Created      : {created.in_timezone('local').format(DT_FORMAT)}")
     print(f"Last Edited  : {edited.in_timezone('local').format(DT_FORMAT)}")
@@ -777,6 +775,103 @@ def list_entries(encrypted_entries: dict[str, str], key: bytes,
         del site, account
 
     return sorted_entries
+
+def entry_menu(encrypted_entries: dict[str, str], key: bytes, salt: bytes, eid: str) -> int:
+    """
+    -------------------------------------------------------
+    Entry Menu 
+    -------------------------------------------------------
+    """
+    res = display_entry(encrypted_entries, key, eid)
+    if res != 0:
+        return 1
+
+    while True:
+        
+        print(f"\n--- Entry Menu ---\n"
+                f"(C) Copy Password    (U) Copy Account\n"
+                f"(S) Show Password    (H) Password History \n"
+                f"(A) Show All         (T) Get TOTP Code \n"
+                f"(E) Edit Entry       (Enter) Main Menu \n"
+                ,end="\n > ")
+        choice_2 = input().strip().lower()
+
+        # == COPY PASSWORD ===================================
+        if choice_2 == "u":
+            entry_data = get_entry_data(encrypted_entries, key, eid)
+            user = entry_data.get("account", "") if entry_data else ""
+            copy_to_clipboard(user, timeout=0, prompt=False)
+            user = None
+            entry_data = None
+            del entry_data
+            continue
+
+        # == COPY PASSWORD ===================================
+        if choice_2 == "c":
+            entry_data = get_entry_data(encrypted_entries, key, eid)
+            pw = entry_data.get("password", "") if entry_data else ""
+            copy_to_clipboard(pw, timeout=CLIPBOARD_TIMEOUT, prompt=False)
+            pw = None
+            entry_data = None
+            continue
+        
+        # == SHOW PASSWORD ===================================
+        elif choice_2 == "s":
+            res = display_entry(encrypted_entries,
+                key,
+                eid,
+                show_pass=True,
+                show_history=False
+            )
+            if res != 0:
+                continue
+
+        # == SHOW PASSWORD HISTORY ============================
+        elif choice_2 == "h":
+            res = display_entry(
+                encrypted_entries,
+                key,
+                eid,
+                show_pass=False,
+                show_history=True
+            )
+            if res != 0:
+                continue
+
+        # == SHOW COMPLETE ENTRY ==============================
+        elif choice_2 == "a":
+            res = display_entry(
+                encrypted_entries,
+                key,
+                eid,
+                show_all=True
+            )
+            if res != 0:
+                continue
+        
+        # == GET TOTP CODE ==============================
+        elif choice_2 == "t":
+            totp_key = get_entry_data(encrypted_entries, key, eid).get("totp")
+            if totp_key:
+                show_totp_code(totp_key)
+            else:
+                print("No TOTP key available.")
+            totp_key = None
+        
+        # == EDIT ENTRY =======================================
+        elif choice_2 == "e":
+            res = update_entry(encrypted_entries, key, salt, eid)
+            if res == 0:
+                break
+            
+        elif choice_2 in {"", "enter", "q"}:
+            break
+
+        else:
+            print("\rInvalid Choice\n", flush=True)
+
+    return 0
+
 
 def change_master_password() -> None:
     """
@@ -1350,15 +1445,22 @@ def show_totp_code(totp_key, interval=30) -> None:
 
     return
 
-def export_json(filepath, key, encrypted_entries):
+def export_json(filepath, key, salt, encrypted_entries):
     """
     Function to export the entire vault to a JSON file in decrypted form.
     Entries are sorted by site and account.
     """
     print("\nWARNING: This will export ALL passwords in PLAIN TEXT!")
-    if input("Type 'EXPORT' to continue: ") != "EXPORT":
-        print("Export cancelled.")
-        return
+    master_pw = getpass.getpass("Master password: ").encode(_UTF8)
+    generated_key = derive_key(master_pw, salt)
+    del master_pw
+
+    if generated_key != key:
+        print ("Error: Invalid Password. Export cancelled. Exiting.")
+        msg = (f"Invalid password entered during export")
+        now = pendulum.now().to_iso8601_string()
+        logging.error(f"[{now}] {msg}\n")
+        sys.exit(1)
 
     try:
         # Temporary list to hold decrypted entries
@@ -1391,7 +1493,17 @@ def export_json(filepath, key, encrypted_entries):
 
         # Write sorted entries into the dict
         for eid, data in decrypted_items:
-            vault["entries"][eid] = data
+
+            # Force same order for all entries
+            json_order = ["site", "account", "password", "note", "totp", "created_date", "edited_date"]
+            ordered_entry = {k: data[k] for k in json_order if k in data}
+
+            # Order doesnt matter for remaining keys
+            for k, v in data.items():
+                if k not in json_order:
+                    ordered_entry[k] = v
+
+            vault["entries"][eid] = ordered_entry
 
         # Save to file
         with open(filepath, "w", encoding=_UTF8) as f:
@@ -1457,36 +1569,49 @@ def import_csv(filepath, encrypted_entries, key, salt):
     with open(filepath, "r", encoding=_UTF8) as f:
         delimiter = ','
         print (f"Importing from CSV... Delimiter = '{delimiter}'")
-        reader = csv.DictReader(f, delimiter=delimiter)
-
-        # Ensure CSV contains required columns
-        required = {"site", "account", "password", "note"}
-        if not required.issubset(reader.fieldnames):
-            raise ValueError("CSV must contain: site, account, password, note")
-
+        csv_reader = csv.DictReader(f, delimiter=delimiter)
+        curr_time = pendulum.now().to_iso8601_string()
         imported_count = 0
 
-        for row in reader:
-            # Clean values
-            site = row.get("site", "") or ""
-            account = row.get("account", "") or ""
-            password = row.get("password", "") or ""
-            note = row.get("note", "") or ""
+        # Map export field names to field names used by PasswordVault_CLI.
+        # e.x. Bitwarden export password field is "login_password" 
+        for row in csv_reader:
+            entry_obj = {}
 
-            # Build plaintext entry object
-            entry_obj = {
-                "site": site.strip(),
-                "account": account.strip(),
-                "password": password.strip(),
-                "note": note.strip(),
-                "created_date": pendulum.now().to_iso8601_string(),
-                "edited_date": pendulum.now().to_iso8601_string()
-            }
+            for field in csv_reader.fieldnames:
+                field = field.lower()
+                value = row.get(field, "")
+                if value:
+                    if field == "name":
+                        entry_obj["site"] = value
 
+                    elif field == "login_username":
+                        entry_obj["account"] = value
+
+                    elif field == "login_password":
+                        entry_obj["password"] = value
+
+                    elif field == "notes":
+                        entry_obj["note"] = value
+
+                    elif field == "login_totp":
+                        entry_obj["totp"] = value   
+                    else:
+                        # Get whatever else is stored
+                        entry_obj[field] = value
+
+
+            entry_obj["created_date"] = curr_time
+            entry_obj["edited_date"] = curr_time
+            entry_obj["imported_from"] = filepath
+
+            
             plaintext = json.dumps(entry_obj)
-
+            entry_obj.clear()
+            del entry_obj
             # Encrypt using master key
             encrypted_blob = encrypt(plaintext, key)
+            del plaintext
 
             # Generate unique entry ID
             eid = secrets.token_hex(EID_LEN)
@@ -1496,12 +1621,13 @@ def import_csv(filepath, encrypted_entries, key, salt):
             # Save into vault
             encrypted_entries[eid] = encrypted_blob
             imported_count += 1
+
     save_vault(encrypted_entries,salt,key)
     print(f"Imported {imported_count} entries from CSV.")
     return True
 
 def wipe_terminal():
-    # Wipes terminal screen (works on Windows, macOS, Linux)
+    # Wipes terminal screen
     os.system('cls' if os.name == 'nt' else 'clear')
 
 # ==============================================================
@@ -1513,10 +1639,9 @@ def main():
     key, encrypted_entries, salt = load_vault(master_pw)
 
     # Best effort to clear Strings. Python Strings are imutable.
-    master_pw = secrets.token_bytes(len(master_pw))
     master_pw = b"\x00" * len(master_pw)
     del master_pw
-
+    
     # clears clipboard on exit
     atexit.register(clear_clipboard_history)
 
@@ -1524,6 +1649,7 @@ def main():
         gc.collect()
 
         if CLEAR_SCREEN:
+            time.sleep(0.4)
             wipe_terminal()
         print("\n--- Main Menu ---")
         print("\n 1) Add   2) Get   6) Change Master PW   7) Quit")
@@ -1576,13 +1702,14 @@ def main():
 
             encrypted_entries[entry_id] = encrypted_blob
             save_vault(encrypted_entries, salt, key)
-            print(f"Saved → ID: {entry_id}")
+            print(f"Entry added to vault")
+
 
         # == GET ENTRY =======================================
         elif choice == "2":
             print(f"Retrieve a list of entries that match query. " 
                 f"Multiple words accepted. "
-                f"Enter to show all.")
+                f"Press Enter to show all.")
             query = input("\n Enter search term: ").strip().lower()
             entries = list_entries(encrypted_entries, key, query)
 
@@ -1596,94 +1723,9 @@ def main():
                 print (" Invalid selection.")
                 continue
             eid = entries[selection - 1]
-            res = display_entry(encrypted_entries, key, eid)
-            if res != 0:
-                continue
 
-            while True:
-                
-                print(f"\n--- Entry Menu ---\n"
-                      f"(C) Copy Password    (U) Copy Account\n"
-                      f"(S) Show Password    (H) Password History \n"
-                      f"(A) Show All         (T) Get TOTP Code \n"
-                      f"(E) Edit Entry       (Enter) Main Menu \n"
-                      ,end="\n > ")
-                choice_2 = input().strip().lower()
+            res = entry_menu(encrypted_entries, key, salt, eid)
 
-                # == COPY PASSWORD ===================================
-                if choice_2 == "u":
-                    entry_data = get_entry_data(encrypted_entries, key, eid)
-                    user = entry_data.get("account", "") if entry_data else ""
-                    copy_to_clipboard(user, timeout=0, prompt=False)
-                    user = None
-                    entry_data = None
-                    del entry_data
-                    continue
-
-                # == COPY PASSWORD ===================================
-                if choice_2 == "c":
-                    entry_data = get_entry_data(encrypted_entries, key, eid)
-                    pw = entry_data.get("password", "") if entry_data else ""
-                    copy_to_clipboard(pw, timeout=CLIPBOARD_TIMEOUT, prompt=False)
-                    pw = None
-                    entry_data = None
-                    continue
-                
-                # == SHOW PASSWORD ===================================
-                elif choice_2 == "s":
-                    res = display_entry(encrypted_entries,
-                        key,
-                        eid,
-                        show_pass=True,
-                        show_history=False
-                    )
-                    if res != 0:
-                        continue
-
-                # == SHOW PASSWORD HISTORY ============================
-                elif choice_2 == "h":
-                    res = display_entry(
-                        encrypted_entries,
-                        key,
-                        eid,
-                        show_pass=False,
-                        show_history=True
-                    )
-                    if res != 0:
-                        continue
-
-                # == SHOW COMPLETE ENTRY ==============================
-                elif choice_2 == "a":
-                    res = display_entry(
-                        encrypted_entries,
-                        key,
-                        eid,
-                        show_all=True
-                    )
-                    if res != 0:
-                        continue
-                
-                # == GET TOTP CODE ==============================
-                elif choice_2 == "t":
-                    totp_key = get_entry_data(encrypted_entries, key, eid).get("totp")
-                    if totp_key:
-                        show_totp_code(totp_key)
-                    else:
-                        print("No TOTP key available.")
-                    totp_key = None
-                
-                # == EDIT ENTRY =======================================
-                elif choice_2 == "e":
-                    res = update_entry(encrypted_entries, key, salt, eid)
-                    if res == 0:
-                        break
-                    
-                elif choice_2 in {"", "enter", "q"}:
-                    break
-
-                else:
-                    print("\rInvalid Choice\n", flush=True)
-                    time.sleep(0.5)
 
         # == CHANGE MASTER PW ===================================
         elif choice == "6":
@@ -1696,15 +1738,15 @@ def main():
 
         # in development
         elif choice == "export_json":
-            print("Note: In development. Not fully tested.")
-            print("Used to safely backup data for safe storage.")
             timestamp = pendulum.now().format('YYYY_MM_DD_HH_mm_ss')
-            export_json(f"vault_export_{timestamp}.json", key,encrypted_entries)
+            export_json(f"vault_export_{timestamp}.json", key, salt, encrypted_entries)
+
         elif choice == "import_csv":
             print("Note: In development. Not fully tested.")
             print("Used to populate the vault.")
             filename = input("Enter CSV filename to import: ").strip()
             import_csv(f"{filename}.csv", encrypted_entries, key, salt)
+
         elif choice == "import_json":
             print("Note: In development. Not fully tested.")
             filename = input("Enter JSON filename to import: ").strip()
