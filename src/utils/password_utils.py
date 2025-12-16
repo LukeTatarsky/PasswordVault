@@ -108,6 +108,14 @@ def strength_analysis(password: str,*,
     return score
 
 
+def audit_vault(encrypted_entries, key) -> dict:
+    """Runs all password audits and returns a summary."""
+
+def find_reused_passwords(entries: list[dict]) -> dict:
+    """Finds passwords reused across multiple entries."""
+
+
+
 if __name__ == "__main__":
     
     password = 'sde3444ter3r4'

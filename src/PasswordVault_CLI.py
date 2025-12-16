@@ -15,7 +15,6 @@ import secrets
 import string
 import gc
 import logging
-from typing import Dict
 
 # ==============================================================
 # Third-party imports
@@ -228,99 +227,6 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int
             print("   Invalid option — choose 0-9")
         
 
-def list_entries(encrypted_entries: dict[str, str], key: bytes,
-                  query: str = None) -> list[str]:
-    """
-    List vault entries with optional search filtering.
-
-    Each entry is decrypted to extract display metadata. Entries are
-    sorted alphabetically by site and then by account. Corrupted or
-    undecryptable entries are handled gracefully.
-
-    Args:
-        encrypted_entries: Mapping of entry IDs to encrypted Fernet tokens.
-        key: Fernet key used for decryption.
-        query: Optional case-insensitive search string. If provided,
-            only entries matching all search terms are included.
-
-    Returns:
-        A list of entry IDs in the order displayed. Returns an empty
-        list if no entries are found.
-
-    Side Effects:
-        Prints formatted entry listings to stdout.
-
-    Security Notes:
-        - Passwords are never displayed.
-        - Decrypted data is kept in memory only briefly.
-        - Corrupted entries are not decrypted and are clearly marked.
-    """
-    if not encrypted_entries:
-        print("Empty vault — no entries yet.")
-        time.sleep(0.5)
-        return
-    
-    # Temporary dict: eid → (site, account)
-    display_data: dict[str, tuple[str, str]] = {}
-
-    for eid, blob in encrypted_entries.items():
-        try:
-            data = json.loads(decrypt(blob, key))
-            site = data.get("site", "")
-            account = data.get("account", "")
-            note = data.get("note", "")
-            data.clear()
-            del data
-
-            # Build searchable text
-            searchable_str = " ".join([site, account, note]).lower()
-            
-            # Filter if searching
-            if query:
-                query = query.lower().strip()
-                terms = query.split()
-            
-                # Keep entry only if ALL words appear somewhere
-                if not all(term in searchable_str for term in terms):
-                    continue
-    
-            display_data[eid] = (site, account)
-            del searchable_str, note, account, site
-
-        except Exception:
-            # only show corrupted if not searching
-            if not query:
-                display_data[eid] = ("corrupted", "")
-
-    if not display_data:
-        print("  No entries found.")
-        return
-    
-    # Sort by site , then account
-    sorted_entries = sorted(
-        display_data.items(),
-        key=lambda entry: (entry[1][0].lower(), entry[1][1].lower() or "")
-    )
-    display_data.clear()
-    del display_data
-
-    print(SEP_SM)
-    print (f" {'Entry':>5}   → {'Site':^{SITE_LEN}}  {'Account':^{ACCOUNT_LEN}}")
-    print(SEP_SM)
-
-    i = 0
-    for eid, (site, account) in sorted_entries:
-        site = site if len(site) <= SITE_LEN else site[:SITE_LEN-3] + "..."
-        account = account if len(account) <= ACCOUNT_LEN else account[:ACCOUNT_LEN-3] + "..."
-        # Print starting at 1 for ease of use. Subtract 1 when calling display
-        print(f"{i+1:>6}   → {site:^{SITE_LEN}}  {account:^{ACCOUNT_LEN}}")
-        # Only return a list of eid's
-        sorted_entries[i] = eid
-        i+=1
-        del site, account
-
-    return sorted_entries
-
 def entry_menu(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int:
     """
     Display and handle the interactive menu for a single vault entry.
@@ -358,7 +264,8 @@ def entry_menu(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int:
                 f"(C) Copy Password    (U) Copy Account\n"
                 f"(S) Show Password    (H) Password History \n"
                 f"(A) Show All         (T) Get TOTP Code \n"
-                f"(E) Edit Entry       (Enter) Main Menu \n"
+                f"(E) Edit Entry       (QR) Show TOTP QR code \n"
+                f"(Enter) Main Menu "
                 ,end="\n > ")
         choice_2 = input().strip().lower()
 
@@ -441,8 +348,8 @@ def entry_menu(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int:
             
             secret=get_entry_data(encrypted_entries, key, eid).get("totp")
             if secret:
-                label=get_entry_data(encrypted_entries, key, eid).get("site")
-                issuer=get_entry_data(encrypted_entries, key, eid).get("account")
+                issuer=get_entry_data(encrypted_entries, key, eid).get("site")
+                label=get_entry_data(encrypted_entries, key, eid).get("account")
                 show_totp_qr(secret, label, issuer)
             else:
                 print("No TOTP key available")
