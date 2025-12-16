@@ -1,17 +1,72 @@
 # gitignore
-password_vault*.json
-password_vault*
-*.pyc
+# =========================
+# Python
+# =========================
 __pycache__/
-.vscode/
-.idea/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# =========================
+# Virtual environments
+# =========================
+.venv/
+venv/
+env/
+.venvPyCharm/
+
+# =========================
+# Test / coverage
+# =========================
 tests/
-t3sting/
-testing/
+.pytest_cache/
 .coverage
-personal_notes.txt
-practice_files/
+
+# =========================
+# IDE
+# =========================
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# =========================
+# OS files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Logs
+# =========================
+*.log
+error.log
+
+# =========================
+# Secrets & local config
+# =========================
 config_local.py
-error.log
-vault*.*
-error.log
+*.env
+.env
+.env.*
+
+# =========================
+# Data files
+# =========================
+data/*
+!data/.gitkeep
+password_vault.json
+bitwarden_export*
+vault_export*
+
+# =========================
+# Practice files
+# =========================
+practice_files/
+Untitled*.py
+
