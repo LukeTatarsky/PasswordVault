@@ -484,8 +484,8 @@ def wipe_terminal():
 def main():
     global salt
     print("- Password Manager —\n")
-    # master_pw = getpass.getpass("Master password: ").encode(UTF8)
-    master_pw = 'l'.encode(UTF8)
+    master_pw = getpass.getpass("Master password: ").encode(UTF8)
+
     key, encrypted_entries, salt = load_vault(master_pw)
 
     # Best effort to clear Strings. Python Strings are imutable.
