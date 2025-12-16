@@ -1,4 +1,3 @@
-
 import string
 import secrets
 import getpass
@@ -143,7 +142,7 @@ def ask_password(prompt: str = "Password:") -> str | None:
                 f"Enter for default of {PASS_DEFAULTS['length']}): ", 
                 default=PASS_DEFAULTS["length"]
                 )
-            if not pw_len:
+            if pw_len is None:
                 break
             if pw_len < PASS_DEFAULTS['min_length']:
                 print(f"  Length too short, using {PASS_DEFAULTS['length']}.")
@@ -151,15 +150,15 @@ def ask_password(prompt: str = "Password:") -> str | None:
 
             min_upper = get_int("  Minimum upper case (Enter for default): ", 
                                 default=PASS_DEFAULTS["min_upper"])
-            if not min_upper:
+            if min_upper is None:
                 break
             min_nums = get_int("  Minimum numbers (Enter for default): ", 
                                default=PASS_DEFAULTS["min_digits"])
-            if not min_nums:
+            if min_nums is None:
                 break
             min_syms = get_int("  Minimum symbols (Enter for default): ", 
                                default=PASS_DEFAULTS["min_symbols"])
-            if not min_syms:
+            if min_syms is None:
                 break
             try:
                 pw = random_password(length = pw_len,

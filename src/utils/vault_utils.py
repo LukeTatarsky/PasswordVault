@@ -13,7 +13,6 @@ from cryptography.fernet import InvalidToken
 
 from config import *
 from .crypto_utils import *
-from .password_utils import *
 
 # global salt 
 salt = b''

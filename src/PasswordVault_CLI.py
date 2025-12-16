@@ -94,11 +94,13 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int
     except Exception:
         print("Entry corrupted — cannot edit")
         return 1
-
+    
+    choice = 0
 
     while True:
         gc.collect()
-        display_entry(data, None, None, show_pass=False)
+        if choice != '5':
+            display_entry(data, None, None, show_pass=False)
         print(
             f"\n--- Editing Menu --- \n"
             f"   1. Edit Site          5. Display Entry (shows all) \n"
@@ -482,7 +484,8 @@ def wipe_terminal():
 def main():
     global salt
     print("- Password Manager —\n")
-    master_pw = getpass.getpass("Master password: ").encode(UTF8)
+    # master_pw = getpass.getpass("Master password: ").encode(UTF8)
+    master_pw = 'l'.encode(UTF8)
     key, encrypted_entries, salt = load_vault(master_pw)
 
     # Best effort to clear Strings. Python Strings are imutable.
@@ -491,15 +494,16 @@ def main():
     
     # clears clipboard on exit
     atexit.register(clear_clipboard_history)
+    choice = ''
 
     while True:
         gc.collect()
 
-        if CLEAR_SCREEN:
+        if CLEAR_SCREEN and choice != "9":
             time.sleep(0.4)
             wipe_terminal()
         print("\n--- Main Menu ---")
-        print("\n 1) Add   2) Get   6) Change Master PW   7) Quit")
+        print("\n 1) Add    2) Get   6) Change Master PW   7) Quit   9) More Options")
         choice = input(" > ").strip()
         
 
@@ -582,7 +586,6 @@ def main():
                     entry_menu(encrypted_entries, key, eid)
                     break
 
-
         # == CHANGE MASTER PW ===================================
         elif choice == "6":
             change_master_password()
@@ -592,9 +595,37 @@ def main():
             print("Goodbye!")
             sys.exit(0)
 
-        # in development
+        # == OPTIONS ===============================================
+        elif choice == "9":
+            print()
+            print(f"  audit_vault - Performs an audit on all passwords contained in vault.")
+            print(f"  export_json - Exports vault in plaintext for backup.")
+            print(f"  import_json - Imports previously exported vault from backup.")
+            print(f"  import_csv  - Imports data from other password managers.")    
+
+        # == AUDIT VAULT ===================================
+        elif choice == "audit_vault":
+            t_exposure = input("\n Would you like to check for exposed passwords? (y/n): ").strip()
+            t_exposure = 1 if t_exposure == "y" else 0
+
+            t_strength = input(" Would you like to test password strength? (y/n): ").strip()
+            t_strength = 0 if t_strength == "n" else 1
+
+            t_reuse = input(" Would you like to check for password re-use? (y/n): ").strip()
+            t_reuse = 0 if t_reuse == "n" else 1
+
+            confirm = input("\n Type 'audit' to confirm: ").strip()
+            if confirm != "audit":
+                continue
+            
+            audit_vault(encrypted_entries, key,
+                         test_exposure=t_exposure, 
+                         test_strength=t_strength, 
+                         test_reuse=t_reuse)
+
+        # In development
         elif choice == "export_json":
-            timestamp = pendulum.now().format('YYYY_MM_DD_HH_mm_ss')
+            timestamp = pendulum.now().format(DT_FORMAT_EXPORT)
             export_json(f"vault_export_{timestamp}.json", key, encrypted_entries, salt)
 
         elif choice == "import_csv":

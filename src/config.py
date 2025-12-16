@@ -48,6 +48,7 @@ CLIPBOARD_LENGTH = 80                # Number of entries to flood
 UTF8 = "utf-8"
 DT_FORMAT = "MMM D, YYYY hh:mm:ss A"
 DT_FORMAT_PASS_HISTORY = "MMM D, YY"
+DT_FORMAT_EXPORT = 'YYYY_MM_DD_HH_mm_ss'
 CLEAR_SCREEN = True
 
 # ==============================================================
