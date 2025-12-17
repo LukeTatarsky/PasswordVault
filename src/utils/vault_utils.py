@@ -345,17 +345,17 @@ def display_entry(source: Dict[str, Any],
             return 1
 
     print(f"\n{SEP_LG}")
-    print(f"Site         : {data.pop('site', '(missing)')}")
+    print(f"Site         : {data.get('site', '(missing)')}")
 
     # === Account ==========================================================
-    account = data.pop('account') or ''
+    account = data.get('account') or ''
     if account:
         print(f"Account      : {account}")
     account = secrets.token_bytes(len(account))
     del account
 
     # === Password (masked or revealed) ====================================
-    password = data.pop('password', '') or ''
+    password = data.get('password', '') or ''
     if show_pass or show_all:
         print(f"Password     : {password}")
     elif password:
@@ -366,7 +366,7 @@ def display_entry(source: Dict[str, Any],
 
     # === Password History (only if requested and exists) ==================
     if show_history or show_all: 
-        history = data.pop('password_history', [])
+        history = data.get('password_history', [])
         if history:
             print(f"Pass History : ")
             print(f" - Last Used :")
@@ -381,7 +381,7 @@ def display_entry(source: Dict[str, Any],
             print(SEP_SM)
 
     # === Note =============================================================
-    note = data.pop('note', '').strip()
+    note = data.get('note', '').strip()
     if note:
         print("Note")
         print(f"{SEP_SM}\n{note}\n{SEP_SM}")
@@ -389,7 +389,7 @@ def display_entry(source: Dict[str, Any],
 
     # === Recovery Keys =====================================================
     if show_all:
-        keys = data.pop('keys', '')
+        keys = data.get('keys', '')
         if show_all and keys:
             print("Keys")
             print(f"{SEP_SM}\n{keys}\n{SEP_SM}")
@@ -400,7 +400,7 @@ def display_entry(source: Dict[str, Any],
 
     # === TOTP Key ==========================================================
     if show_all:
-        totp = data.pop('totp', '')
+        totp = data.get('totp', '')
         if totp:
             print(f"TOTP         : **protected**")
         elif totp:
@@ -448,7 +448,7 @@ def delete_corrupted_entry(encrypted_entries: dict[str, str],
 
     confirm = input("\nDelete this entry permanently? (type 'del' to confirm): ")
     if confirm.strip().lower() == "del":
-        encrypted_entries.pop(eid, None)
+        encrypted_entries.get(eid, None)
         save_vault(encrypted_entries, key)
         print("Corrupted entry removed.")
         return 0

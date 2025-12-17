@@ -215,9 +215,9 @@ def audit_vault(encrypted_entries, key: bytes,
     for eid in encrypted_entries:
         data = get_entry_data(encrypted_entries, key, eid)
 
-        site = data.pop("site", "")
-        account = data.pop("account", "")
-        pw = data.pop("password", "")
+        site = data.get("site", "")
+        account = data.get("account", "")
+        pw = data.get("password", "")
 
         del data
 

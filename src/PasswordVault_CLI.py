@@ -135,7 +135,7 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int
 
             # Keep password history
             pw_history = data.get("password_history", [])
-            pw_history.insert(0, {"password" : data.pop("password", ""),
+            pw_history.insert(0, {"password" : data.get("password", ""),
                                 "last_used" : pendulum.now().to_iso8601_string()})
             data["password_history"] = pw_history[:PASSWORD_HISTORY_LIMIT]
             data["password"] = new_pw
@@ -272,7 +272,7 @@ def entry_menu(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int:
         # == COPY PASSWORD ===================================
         if choice_2 == "u":
             entry_data = get_entry_data(encrypted_entries, key, eid)
-            user = entry_data.pop("account", "") if entry_data else ""
+            user = entry_data.get("account", "") if entry_data else ""
             copy_to_clipboard(user, timeout=0, prompt=False)
             user = None
             entry_data = None
@@ -282,7 +282,7 @@ def entry_menu(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int:
         # == COPY PASSWORD ===================================
         if choice_2 == "c":
             entry_data = get_entry_data(encrypted_entries, key, eid)
-            pw = entry_data.pop("password", "") if entry_data else ""
+            pw = entry_data.get("password", "") if entry_data else ""
             copy_to_clipboard(pw, timeout=CLIPBOARD_TIMEOUT, prompt=False)
             pw = None
             entry_data = None
