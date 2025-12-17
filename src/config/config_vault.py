@@ -7,15 +7,22 @@ Configuration constants
 # ==============================================================
 # Name of encrypted vault file
 VAULT_FILE = "password_vault.json"
+
 # Canary to verify master password. Do not change once vault is created.
-KEY_CHECK_STRING = "MasterKeyValidation"  
+KEY_CHECK_STRING = "MasterKeyValidation"
+
+# Length of generated random salt
+SALT_LEN = 16
 
 # Argon2id parameters
 # Changing these will invalidate existing vaults. Backup plaintext first!
 ARGON_TIME = 6             # Iterations - controls CPU cost
 ARGON_MEMORY = 256 * 1024  # 256 MiB - controls RAM cost
 ARGON_PARALLELISM = 2
-ARGON_HASH_LEN = 32        # # 32 byte - Fernet key size - DO NOT CHANGE
+ARGON_HASH_LEN = 32        # bytes - Encryption key size - DO NOT CHANGE
+
+# ChaCha20Poly1305 nonce length. DO NOT CHANGE
+NONCE_LEN = 12
 
 # ==============================================================
 # Password generation defaults (strong but practical)
@@ -54,8 +61,8 @@ CLEAR_SCREEN = True
 # ==============================================================
 # System Constants
 # ==============================================================
-# length of eid (hex)
-EID_LEN = 4 
+# length of eid
+EID_LEN = 16
 
 # length of visible name when displaying entries
 SITE_LEN = 15
@@ -71,6 +78,6 @@ SEP_SM = "-"*50
 
 # ==============================================================
 try:
-    from config_local import *
+    from config.config_local import *
 except ImportError:
     pass  # No local config — use defaults above

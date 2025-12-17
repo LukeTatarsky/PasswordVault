@@ -77,8 +77,7 @@ def show_totp_code(totp_key, interval=30) -> None:
     return
 
 def show_totp_qr(totp_secret, label, issuer):
-    
-    uri = generate_otp_uri(secret=totp_secret, label=label,issuer=issuer)
+    uri = generate_otp_uri(secret=totp_secret, label=label.capitalize(),issuer=issuer.capitalize())
     # Generate QR
     qr = qrcode.QRCode(box_size=10, border=4)
     qr.add_data(uri)
@@ -99,6 +98,11 @@ def show_totp_qr(totp_secret, label, issuer):
     lbl_img = tk.Label(root, image=photo)
     lbl_img.image = photo
     lbl_img.pack(padx=20, pady=20)
+
+    # uri_box = tk.Text(root, height=4, width=90)
+    # uri_box.insert("1.0", f"{issuer}\n{label}\n{totp_secret}")
+    # uri_box.configure(state="disabled")
+    # uri_box.pack(padx=10, pady=(0, 10))
 
     root.mainloop()
 

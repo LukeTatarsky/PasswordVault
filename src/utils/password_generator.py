@@ -1,7 +1,7 @@
 import string
 import secrets
 import getpass
-from config import *
+from config.config_vault import *
 from .user_input import *
 from .password_utils import *
 

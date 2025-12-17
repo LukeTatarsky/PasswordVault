@@ -1,7 +1,7 @@
 import secrets
 import getpass
 import csv
-from config import *
+from config.config_vault import *
 from .crypto_utils import *
 from .vault_utils import *
 
@@ -23,7 +23,7 @@ def export_json(filepath, key, encrypted_entries, salt):
 
     Args:
         filepath: Destination path for the exported JSON file.
-        key: Active Fernet encryption key for the current vault session.
+        key: Master key for the current vault session.
         encrypted_entries: Dictionary mapping entry IDs to encrypted tokens.
         salt: Salt used for key derivation verification.
 
@@ -38,7 +38,7 @@ def export_json(filepath, key, encrypted_entries, salt):
         - Writes a plaintext JSON file to disk.
         - Logs failed authentication attempts.
     """
-    print("\nWARNING: This will export ALL passwords in PLAIN TEXT!")
+    print("\nWARNING: This will export ALL passwords and data in plain text!!!\n")
     master_pw = getpass.getpass("Master password: ").encode(UTF8)
     generated_key = derive_key(master_pw, salt)
     del master_pw
@@ -57,7 +57,7 @@ def export_json(filepath, key, encrypted_entries, salt):
         # Decrypt each entry first
         for eid, blob in encrypted_entries.items():
             try:
-                decrypted_json = decrypt(blob, key)
+                decrypted_json = decrypt(blob, key, eid)
                 data = json.loads(decrypted_json)
                 # store tuple (eid, data) for sorting later
                 decrypted_items.append((eid, data))
@@ -97,7 +97,11 @@ def export_json(filepath, key, encrypted_entries, salt):
         with open(filepath, "w", encoding=UTF8) as f:
             json.dump(vault, f, indent=4)
 
-        print("Vault exported successfully.")
+        # Error / Success message 
+        if len(decrypted_items) != len(encrypted_entries):
+            print (" Error Exporting entries.")
+        else:
+            print (" Vault exported successfully.")
 
     except Exception as e:
         print(f"Failed to export vault: {e}")
@@ -119,7 +123,7 @@ def import_exported_json(filepath, encrypted_entries, key, salt):
     Args:
         filepath: Path to the exported JSON file.
         encrypted_entries: In-memory encrypted vault entries.
-        key: Active Fernet encryption key.
+        key: Active master key.
         salt: Current vault salt (unused but required for interface symmetry).
 
     Returns:
@@ -142,17 +146,21 @@ def import_exported_json(filepath, encrypted_entries, key, salt):
             # Convert entry dict -> JSON plaintext string
             plaintext_json = json.dumps(entry_obj)
 
-            # Encrypt with *current* master key
-            encrypted_blob = encrypt(plaintext_json, key)
-
             # Generate a new unique ID
-            new_eid = secrets.token_hex(EID_LEN)
-            while new_eid in encrypted_entries:
-                new_eid = secrets.token_hex(EID_LEN)
+            eid = secrets.token_bytes(EID_LEN)
+            while eid in encrypted_entries:
+                eid = secrets.token_bytes(EID_LEN)
+
+            # Convert eid bytes to string
+            eid = bytes_to_str(eid)
+            
+            # Encrypt with *current* master key
+            encrypted_blob = encrypt(plaintext_json, key, eid)
 
             # Append into current vault
-            encrypted_entries[new_eid] = encrypted_blob
+            encrypted_entries[eid] = encrypted_blob
             imported_count += 1
+
         save_vault(encrypted_entries, key)
         print(f"Imported {imported_count} entries from JSON.")
         return True
@@ -175,7 +183,7 @@ def import_csv(filepath, encrypted_entries, key, salt):
     Args:
         filepath: Path to the CSV file to import.
         encrypted_entries: In-memory encrypted vault entries.
-        key: Active Fernet encryption key.
+        key: Active master key.
         salt: Current vault salt (unused but retained for consistency).
 
     Returns:
@@ -198,6 +206,7 @@ def import_csv(filepath, encrypted_entries, key, salt):
         imported_count = 0
 
         # Map other export field names to field names used by PasswordVault_CLI.
+        # Case sensitive
         bitwarden_map = {"name": "site",
                    "login_username": "account",
                    "login_password": "password",
@@ -215,9 +224,10 @@ def import_csv(filepath, encrypted_entries, key, salt):
             entry_obj = {}
 
             for field in csv_reader.fieldnames:
-                field = field.lower()
+                field = field
                 value = row.get(field, "")
                 if value:
+                        # If we have a mapping, use that 
                     if field in mapping:
                         entry_obj[mapping[field]] = value
                     else:
@@ -231,15 +241,20 @@ def import_csv(filepath, encrypted_entries, key, salt):
             plaintext = json.dumps(entry_obj)
             entry_obj.clear()
             del entry_obj
-            # Encrypt using master key
-            encrypted_blob = encrypt(plaintext, key)
-            del plaintext
 
             # Generate unique entry ID
-            eid = secrets.token_hex(EID_LEN)
+            eid = secrets.token_bytes(EID_LEN)
             while eid in encrypted_entries:
-                eid = secrets.token_hex(EID_LEN)
+                eid = secrets.token_bytes(EID_LEN)
 
+            # Convert eid bytes to string
+            eid = bytes_to_str(eid)
+
+            # Encrypt using master key
+            encrypted_blob = encrypt(plaintext, key, eid)
+            del plaintext
+
+            
             # Save into vault
             encrypted_entries[eid] = encrypted_blob
             imported_count += 1

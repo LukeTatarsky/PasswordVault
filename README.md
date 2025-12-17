@@ -1,19 +1,31 @@
 # PasswordVault — Secure Password Manager CLI
-A completely offline, cryptographically secure password manager written in Python.
+An offline, cryptographically secure password manager written in Python.
 Designed with memory safety in mind, single-entry decryption, and automatic clipboard wiping. Includes an integrated password generator that creates strong, truly random passwords.
 
 
 ## Features
-- AES-128-CBC + HMAC-SHA256 encryption via Fernet
-- Master key derived securely using Argon2id key derivation function 
-- Master password canary instantly detects wrong password or corruption
+- Authenticated encryption for all vault data with integrity protection
+- Context binding prevents entry swapping and tampering
+- Master key derived securely using a memory-hard password-based key derivation function 
 - Atomic file saves – never lose data on crash or power loss
 - 2FA Authenticator Key storage - Generates TOTP codes
 - Full-text search across site, account, and notes
-- Password history with timestamps (configurable)
-- Copy masked passwords to clipboard, auto clears after set time.
+- Password history (configurable)
+- Copy masked passwords to clipboard, auto clears after set time (configurable).
 - Secure clipboard handling with auto-clear (configurable)
-- Secure password generator using `secrets` module (customizable)
+- Random password generator using `secrets` module (customizable)
+
+- Optional security auditing:
+  - Password strength analysis using zxcvbn
+  - Breach exposure checks via Have I Been Pwned *(online using k-anonymity)*
+  - Detection of reused passwords across entries
+  - Severity-sorted results with optional CSV export
+
+- Import / Export & migration:
+  - Plaintext JSON export for backups and migrations
+  - Re-import of exported vaults
+  - CSV import support for migrating from other password managers and browser exports
+
 
 ## Installation
 ```bash
@@ -82,3 +94,4 @@ This tool is as secure as your master password and your machine.
 - Never run on a compromised or shared system.
 - Use a long, unique master password
 - Backup a copy of the encrypted vault regularly
+- Warning: JSON exports contain passwords in plaintext and must be protected appropriately.

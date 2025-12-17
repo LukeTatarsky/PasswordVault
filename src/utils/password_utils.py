@@ -6,7 +6,7 @@ from collections import defaultdict
 
 from zxcvbn import zxcvbn
 from .vault_utils import get_entry_data
-from config import DT_FORMAT_EXPORT, SEP_LG, SITE_LEN, ACCOUNT_LEN
+from config.config_vault import DT_FORMAT_EXPORT, SEP_LG, SITE_LEN, ACCOUNT_LEN
 
 
 def pwned_password_count(password: str, timeout: int = 5) -> int:
@@ -215,9 +215,9 @@ def audit_vault(encrypted_entries, key: bytes,
     for eid in encrypted_entries:
         data = get_entry_data(encrypted_entries, key, eid)
 
-        site = data.get("site", "")
-        account = data.get("account", "")
-        pw = data.get("password", "")
+        site = data.pop("site", "")
+        account = data.pop("account", "")
+        pw = data.pop("password", "")
 
         del data
 

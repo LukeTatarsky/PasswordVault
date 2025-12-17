@@ -19,8 +19,8 @@ import logging
 # ==============================================================
 # Third-party imports
 # ==============================================================
-from config import *
-from logging_config import setup_logging
+from config.config_vault import *
+from config.logging_config import setup_logging
 from utils.crypto_utils import *
 from utils.totp_qr_code import *
 from utils.password_utils import *
@@ -32,7 +32,6 @@ from utils.password_generator import *
 try:
     import pyperclip
     import pendulum
-    from cryptography.fernet import InvalidToken
     
 except ImportError as e:
     missing_package = e.name if hasattr(e, "name") else "unknown package"
@@ -61,9 +60,8 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int
     Deletions also require explicit confirmation.
 
     Args:
-        encrypted_entries: In-memory mapping of entry IDs to encrypted
-            Fernet tokens.
-        key: Fernet key used for decryption and encryption.
+        encrypted_entries: In-memory mapping of entry IDs to encrypted tokens.
+        key: key used for decryption and encryption.
         eid: Entry ID to edit.
 
     Returns:
@@ -87,8 +85,8 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int
 
     # Load and decrypt the entry
     try:
-        data = json.loads(decrypt(encrypted_entries[eid], key))
-    except InvalidToken:
+        data = json.loads(decrypt(encrypted_entries[eid], key, eid))
+    except InvalidTag:
             res = delete_corrupted_entry(encrypted_entries, key, eid)
             return res
     except Exception:
@@ -137,7 +135,7 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int
 
             # Keep password history
             pw_history = data.get("password_history", [])
-            pw_history.insert(0, {"password" : data.get("password", ""),
+            pw_history.insert(0, {"password" : data.pop("password", ""),
                                 "last_used" : pendulum.now().to_iso8601_string()})
             data["password_history"] = pw_history[:PASSWORD_HISTORY_LIMIT]
             data["password"] = new_pw
@@ -175,7 +173,7 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int
             data["edited_date"] = pendulum.now().to_iso8601_string()
 
             # Re-encrypt and save
-            blob = encrypt(json.dumps(data, separators=(',', ':')), key)
+            blob = encrypt(json.dumps(data, separators=(',', ':')), key, eid)
             encrypted_entries[eid] = blob
             save_vault(encrypted_entries, key)
             print("\nEntry updated and saved successfully!")
@@ -238,8 +236,8 @@ def entry_menu(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int:
     TOTP-related operations.
 
     Args:
-        encrypted_entries: Mapping of entry IDs to encrypted Fernet tokens.
-        key: Fernet key used to decrypt entry data.
+        encrypted_entries: Mapping of entry IDs to encrypted tokens.
+        key: key used to decrypt entry data.
         eid: Entry ID to operate on.
 
     Returns:
@@ -274,7 +272,7 @@ def entry_menu(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int:
         # == COPY PASSWORD ===================================
         if choice_2 == "u":
             entry_data = get_entry_data(encrypted_entries, key, eid)
-            user = entry_data.get("account", "") if entry_data else ""
+            user = entry_data.pop("account", "") if entry_data else ""
             copy_to_clipboard(user, timeout=0, prompt=False)
             user = None
             entry_data = None
@@ -284,7 +282,7 @@ def entry_menu(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int:
         # == COPY PASSWORD ===================================
         if choice_2 == "c":
             entry_data = get_entry_data(encrypted_entries, key, eid)
-            pw = entry_data.get("password", "") if entry_data else ""
+            pw = entry_data.pop("password", "") if entry_data else ""
             copy_to_clipboard(pw, timeout=CLIPBOARD_TIMEOUT, prompt=False)
             pw = None
             entry_data = None
@@ -502,10 +500,11 @@ def main():
         if CLEAR_SCREEN and choice != "9":
             time.sleep(0.4)
             wipe_terminal()
+
         print("\n--- Main Menu ---")
-        print("\n 1) Add    2) Get   6) Change Master PW   7) Quit   9) More Options")
+        print("\n 1) New Entry    2) Get Entry     7) Quit   9) More Options")
         choice = input(" > ").strip()
-        
+        print()
 
         # == ADD ENTRY =====================================
         if choice == "1":
@@ -538,22 +537,24 @@ def main():
                                 "totp": ""}, separators=(',', ':'),
                                 )
             
-            encrypted_blob = encrypt(entry, key)
+            # Generate unique entry identifier
+            eid = secrets.token_bytes(EID_LEN)
+            while eid in encrypted_entries:
+                eid = secrets.token_bytes(EID_LEN)
 
-            entry = None
-            note = None
-            password = None
-            site = None
-            account = None
+            # Convert eid bytes to string
+            eid = bytes_to_str(eid)
+
+            # Encrypt data
+            encrypted_blob = encrypt(entry, key, eid)
+
+            # Remove references
             del entry, note, password, site, account
 
-            entry_id = secrets.token_hex(EID_LEN)
-            # Ensure unique ID
-            while entry_id in encrypted_entries:
-                entry_id = secrets.token_hex(EID_LEN)
-
-            encrypted_entries[entry_id] = encrypted_blob
+            # Save
+            encrypted_entries[eid] = encrypted_blob
             save_vault(encrypted_entries, key)
+
             print(f"Entry added to vault")
 
 
@@ -586,10 +587,6 @@ def main():
                     entry_menu(encrypted_entries, key, eid)
                     break
 
-        # == CHANGE MASTER PW ===================================
-        elif choice == "6":
-            change_master_password()
-
         # == QUIT ===============================================
         elif choice == "7":
             print("Goodbye!")
@@ -598,10 +595,15 @@ def main():
         # == OPTIONS ===============================================
         elif choice == "9":
             print()
+            print(f"  change_pass - Changes master password and Re-encrypts all entries.")
             print(f"  audit_vault - Performs an audit on all passwords contained in vault.")
             print(f"  export_json - Exports vault in plaintext for backup.")
             print(f"  import_json - Imports previously exported vault from backup.")
             print(f"  import_csv  - Imports data from other password managers.")    
+
+        # == CHANGE MASTER PW ===================================
+        elif choice == "change_pass":
+            change_master_password()
 
         # == AUDIT VAULT ===================================
         elif choice == "audit_vault":
@@ -623,6 +625,7 @@ def main():
                          test_strength=t_strength, 
                          test_reuse=t_reuse)
 
+        # == IMPORT/EXPORT ===================================
         # In development
         elif choice == "export_json":
             timestamp = pendulum.now().format(DT_FORMAT_EXPORT)

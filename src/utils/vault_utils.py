@@ -5,17 +5,18 @@ import logging
 import sys
 import secrets
 import getpass
+import gc
 
 import pendulum
 from typing import Dict, Any, Tuple
-from cryptography.fernet import InvalidToken
+from cryptography.exceptions import InvalidTag
 
-
-from config import *
+from config.config_vault import *
 from .crypto_utils import *
 
-# global salt 
+# globals
 salt = b''
+canary_id = ''
 
 def load_vault(master_pw: str) -> Tuple[bytes, Dict[str, str], bytes]:
     """
@@ -35,25 +36,29 @@ def load_vault(master_pw: str) -> Tuple[bytes, Dict[str, str], bytes]:
 
     Returns:
         A tuple containing:
-            - Derived Fernet key.
+            - Derived master key.
             - Dictionary of encrypted entries mapping entry IDs to tokens.
             - Salt used for key derivation.
 
     Raises:
         SystemExit: If the vault is corrupted or the master password is incorrect.
     """
-    global salt
+    global salt, canary_id
     # ==============================================================
     # 1. Create new vault if none exists
     # ==============================================================
     if not os.path.exists(VAULT_FILE):
         print("Creating new password vault...")
-        salt = os.urandom(16)
+        salt = secrets.token_bytes(SALT_LEN)
         key = derive_key(master_pw, salt)
+
+        # Create an ID for the canary.
+        canary_id = bytes_to_str(secrets.token_bytes(EID_LEN))
 
         vault = {
             "salt": base64.urlsafe_b64encode(salt).decode(),
-            "canary": encrypt(KEY_CHECK_STRING, key),
+            "canary_id": canary_id,
+            "canary": encrypt(KEY_CHECK_STRING, key, canary_id),
             "entries": {}
         }
         with open(VAULT_FILE, "w", encoding=UTF8) as f:
@@ -78,7 +83,7 @@ def load_vault(master_pw: str) -> Tuple[bytes, Dict[str, str], bytes]:
     # Extract and decode stored salt
     try:
         salt = base64.urlsafe_b64decode(vault["salt"])
-    except (KeyError, base64.binascii.Error):
+    except (KeyError, InvalidTag, base64.binascii.Error):
         msg = "Vault is corrupted: missing or invalid salt!"
         print(msg)
         time.sleep(3)
@@ -92,7 +97,7 @@ def load_vault(master_pw: str) -> Tuple[bytes, Dict[str, str], bytes]:
     # ==============================================================
     # 3. Verify master password using the canary
     # ==============================================================
-    if "canary" not in vault:
+    if "canary" not in vault or "canary_id" not in vault:
         msg = "Vault corrupted: missing canary!"
         print(msg)
         now = pendulum.now().to_iso8601_string()
@@ -100,7 +105,8 @@ def load_vault(master_pw: str) -> Tuple[bytes, Dict[str, str], bytes]:
         sys.exit(1)
 
     try:
-        decrypted_canary = decrypt(vault["canary"], key)
+        canary_id = vault["canary_id"]
+        decrypted_canary = decrypt(vault["canary"], key, canary_id)
 
         if decrypted_canary != KEY_CHECK_STRING:
             msg = "Wrong master password!"
@@ -109,7 +115,7 @@ def load_vault(master_pw: str) -> Tuple[bytes, Dict[str, str], bytes]:
             logging.error(f"[{now}] {msg}\n")
             time.sleep(3)
             sys.exit(1)
-    except InvalidToken:
+    except InvalidTag:
         msg = "Wrong master password or vault is corrupted!"
         print(msg)
         time.sleep(3)
@@ -118,7 +124,7 @@ def load_vault(master_pw: str) -> Tuple[bytes, Dict[str, str], bytes]:
         sys.exit(1)
 
     # ==============================================================
-    # 4. Return decrypted entries container
+    # 4. Return entries container
     # ==============================================================
     encrypted_entries: Dict[str, str] = vault.get("entries", {})
 
@@ -134,7 +140,7 @@ def save_vault(encrypted_entries: dict[str, str], key: bytes) -> None:
 
     Args:
         encrypted_entries: Mapping of entry IDs to encrypted tokens.
-        key: Derived Fernet key used for encryption.
+        key: Derived master key used for encryption.
         salt: Salt used for key derivation.
 
     Side Effects:
@@ -142,7 +148,8 @@ def save_vault(encrypted_entries: dict[str, str], key: bytes) -> None:
     """
     vault = {
         "salt": base64.urlsafe_b64encode(salt).decode("ascii"),
-        "canary": encrypt(KEY_CHECK_STRING, key),
+        "canary_id": canary_id,
+        "canary": encrypt(KEY_CHECK_STRING, key, canary_id),
         "entries": encrypted_entries
     }
 
@@ -167,8 +174,8 @@ def list_entries(encrypted_entries: dict[str, str], key: bytes,
     undecryptable entries are handled gracefully.
 
     Args:
-        encrypted_entries: Mapping of entry IDs to encrypted Fernet tokens.
-        key: Fernet key used for decryption.
+        encrypted_entries: Mapping of entry IDs to encrypted tokens.
+        key: master key used for decryption.
         query: Optional case-insensitive search string. If provided,
             only entries matching all search terms are included.
 
@@ -194,7 +201,7 @@ def list_entries(encrypted_entries: dict[str, str], key: bytes,
 
     for eid, blob in encrypted_entries.items():
         try:
-            data = json.loads(decrypt(blob, key))
+            data = json.loads(decrypt(blob, key, eid))
             site = data.get("site", "")
             account = data.get("account", "")
             note = data.get("note", "")
@@ -255,7 +262,7 @@ def get_entry_data(entries: dict[str, str], key: bytes, eid: str) -> dict[str, o
     """
     Retrieve and decrypt a single vault entry.
 
-    Looks up an encrypted entry by ID, decrypts its Fernet token,
+    Looks up an encrypted entry by ID, decrypts its token,
     parses the resulting JSON, and returns the decrypted data.
 
     If the entry cannot be found, decrypted, or parsed, an empty
@@ -263,7 +270,7 @@ def get_entry_data(entries: dict[str, str], key: bytes, eid: str) -> dict[str, o
 
     Args:
         entries: Mapping of entry IDs to encrypted tokens.
-        key: Fernet key used for decryption.
+        key: Master key used for decryption.
         eid: Entry ID to retrieve.
 
     Returns:
@@ -276,12 +283,12 @@ def get_entry_data(entries: dict[str, str], key: bytes, eid: str) -> dict[str, o
     data: Dict[str, Any] = {}
     try:
         encrypted_token: str = entries[eid]
-        data = json.loads(decrypt(encrypted_token, key))
+        data = json.loads(decrypt(encrypted_token, key, eid))
     except KeyError:
         print("Not found.")
-    except (InvalidToken, json.JSONDecodeError, UnicodeDecodeError):
+    except (InvalidTag, json.JSONDecodeError, UnicodeDecodeError):
         print("Entry may be corrupted, cannot view.")
-        delete_corrupted_entry(entries, key, eid, salt)
+        delete_corrupted_entry(entries, key, eid)
     except Exception as e:
         print(f"Unexpected error: {e}")
     return data
@@ -306,7 +313,7 @@ def display_entry(source: Dict[str, Any],
     Args:
         source: Either the encrypted vault entries dictionary or a
             decrypted entry dictionary.
-        key: Fernet key used for decryption when operating in vault mode.
+        key: Master key used for decryption when operating in vault mode.
         eid: Entry ID to retrieve when operating in vault mode.
         show_pass: If True, reveal the plaintext password.
         show_history: If True, display password history.
@@ -338,26 +345,28 @@ def display_entry(source: Dict[str, Any],
             return 1
 
     print(f"\n{SEP_LG}")
-    print(f"Site         : {data.get('site', '(missing)')}")
+    print(f"Site         : {data.pop('site', '(missing)')}")
+
     # === Account ==========================================================
-    account = data.get('account') or ''
+    account = data.pop('account') or ''
     if account:
         print(f"Account      : {account}")
     account = secrets.token_bytes(len(account))
     del account
 
     # === Password (masked or revealed) ====================================
-    password = data.get('password', '') or ''
+    password = data.pop('password', '') or ''
     if show_pass or show_all:
         print(f"Password     : {password}")
     elif password:
         masked = '*' * PASS_DEFAULTS["length"]
         print(f"Password     : {masked}")
-    password = secrets.token_bytes(len(password))
+    password = None
     del password
+
     # === Password History (only if requested and exists) ==================
     if show_history or show_all: 
-        history = data.get('password_history', [])
+        history = data.pop('password_history', [])
         if history:
             print(f"Pass History : ")
             print(f" - Last Used :")
@@ -370,29 +379,35 @@ def display_entry(source: Dict[str, Any],
             history.clear()
             del history
             print(SEP_SM)
+
     # === Note =============================================================
-    note = data.get('note', '').strip()
+    note = data.pop('note', '').strip()
     if note:
         print("Note")
         print(f"{SEP_SM}\n{note}\n{SEP_SM}")
         del note
+
     # === Recovery Keys =====================================================
-    keys = data.get('keys', '')
-    if show_all and keys:
-        print("Keys")
-        print(f"{SEP_SM}\n{keys}\n{SEP_SM}")
-    elif keys:
-            print(f"Keys         : {"*" * 10}")
-    keys = secrets.token_bytes(len(keys))
-    del keys
+    if show_all:
+        keys = data.pop('keys', '')
+        if show_all and keys:
+            print("Keys")
+            print(f"{SEP_SM}\n{keys}\n{SEP_SM}")
+        elif keys:
+                print(f"Keys         : {"*" * 10}")
+        keys = None
+        del keys
+
     # === TOTP Key ==========================================================
-    totp = data.get('totp', '')
-    if show_all and totp:
-        print(f"TOTP         : {totp}")
-    elif totp:
-        print(f"TOTP         : {"*" * 10}")
-    totp = secrets.token_bytes(len(totp))
-    del totp
+    if show_all:
+        totp = data.pop('totp', '')
+        if totp:
+            print(f"TOTP         : **protected**")
+        elif totp:
+            print(f"TOTP         : {"*" * 10}")
+        totp = None
+        del totp
+
     # === Timestamps =======================================================
     try:
         created = pendulum.parse(data.get('created_date', '1970-01-01T00:00:00Z'))
@@ -400,7 +415,6 @@ def display_entry(source: Dict[str, Any],
     except Exception:
         created = edited = pendulum.now()
 
-    
     print(f"Created      : {created.in_timezone('local').format(DT_FORMAT)}")
     print(f"Last Edited  : {edited.in_timezone('local').format(DT_FORMAT)}")
     print(SEP_LG)
@@ -417,7 +431,7 @@ def delete_corrupted_entry(encrypted_entries: dict[str, str],
 
     Args:
         encrypted_entries: Current in-memory encrypted vault entries.
-        key: Fernet key used for vault encryption.
+        key: Master key used for vault encryption.
         eid: ID of the corrupted entry to remove.
 
     Returns:
@@ -431,10 +445,11 @@ def delete_corrupted_entry(encrypted_entries: dict[str, str],
     """
     print(f"\nEntry '{eid}' appears to be corrupted.")
     print("It cannot be viewed or edited.")
+
     confirm = input("\nDelete this entry permanently? (type 'del' to confirm): ")
     if confirm.strip().lower() == "del":
         encrypted_entries.pop(eid, None)
-        save_vault(encrypted_entries, key, salt)
+        save_vault(encrypted_entries, key)
         print("Corrupted entry removed.")
         return 0
     else:
@@ -465,7 +480,7 @@ def change_master_password() -> None:
         - Empty passwords are rejected.
         - Sensitive password material is wiped from memory when possible.
     """
-    global salt
+    global salt, canary_id
     print("\n=== Change Master Password ===")
 
     old_pw = getpass.getpass("Current master password: ").encode(UTF8)
@@ -488,20 +503,23 @@ def change_master_password() -> None:
         print("Current password verified. Re-encrypting all entries...")
 
         # 2. Derive a new salt and key from the new password
-        salt = os.urandom(16)
+        salt = secrets.token_bytes(SALT_LEN)
         new_key = derive_key(new_pw, salt)
+
+        # Generate a new canary ID
+        canary_id = bytes_to_str(secrets.token_bytes(EID_LEN))
 
         # 3. Decrypt and re-encrypt every entry with the new key
         new_encrypted_entries: Dict[str, str] = {}
         for eid, old_blob in temp_entries.items():
             try:
                 # Decrypt with old key
-                plaintext = decrypt(old_blob, temp_key)
+                plaintext = decrypt(old_blob, temp_key, eid)
                 # Encrypt again with new key
-                new_blob = encrypt(plaintext, new_key)
-                plaintext = None
+                new_blob = encrypt(plaintext, new_key, eid)
+                del plaintext
                 new_encrypted_entries[eid] = new_blob
-            except InvalidToken:
+            except InvalidTag:
                 print(f"\nFailed to decrypt entry {eid}")
                 print("Aborting password change.")
                 return
@@ -509,8 +527,7 @@ def change_master_password() -> None:
                 print(f"\nFailed to re-encrypt entry {eid}: {e}")
                 print("Aborting password change.")
                 return
-            finally:
-                plaintext = None
+            
         # 4. Save with the new salt and new encrypted blobs
         save_vault(new_encrypted_entries, new_key)
         print("Master password changed successfully!")
@@ -522,7 +539,10 @@ def change_master_password() -> None:
         new_pw = secrets.token_bytes(len(new_pw))
         confirm = secrets.token_bytes(len(confirm))
         del old_pw, new_pw, confirm
+        gc.collect()
         print("Exiting...")
         time.sleep(2)
         sys.exit(0)
     return
+
+
