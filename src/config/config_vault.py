@@ -2,11 +2,17 @@
 """
 Configuration constants
 """
+from pathlib import Path
 # ==============================================================
 # Vault settings
 # ==============================================================
+# Software version
+VERSION = "1.3.0"
+
 # Name of encrypted vault file
-VAULT_FILE = "password_vault.json"
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+VAULT_FILE = BASE_DIR  / "password_vault.json"
+
 
 # Canary to verify master password. Do not change once vault is created.
 KEY_CHECK_STRING = "MasterKeyValidation"
@@ -24,12 +30,14 @@ ARGON_HASH_LEN = 32        # bytes - Encryption key size - DO NOT CHANGE
 # ChaCha20Poly1305 nonce length. DO NOT CHANGE
 NONCE_LEN = 12
 
+
+
 # ==============================================================
 # Password generation defaults (strong but practical)
 # ==============================================================
 PASS_DEFAULTS = {
     "length": 20,                   # Default generated password length
-    "min_length": 14,                # Minimum allowed (manual or generated)
+    "min_length": 0,                # Minimum allowed (manual or generated)
     "min_upper": 3,
     "min_lower": 3,
     "min_digits": 3,

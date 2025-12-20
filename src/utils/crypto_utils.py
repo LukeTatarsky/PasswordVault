@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import secrets
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from argon2.low_level import hash_secret_raw, Type
@@ -36,6 +37,14 @@ def derive_key(pw: bytes, salt: bytes) -> bytes:
         type=Type.ID
     )
     return key
+
+def pepper_pw(pw: str, pepper: bytes):
+    hashed = hashlib.blake2b(
+        bytes(pw),
+        key=bytes(pepper),
+        digest_size=32
+        )
+    return hashed.digest()
 
 def encrypt(plaintext: str, key: bytes, eid: str) -> str:
     """
@@ -126,6 +135,7 @@ def str_to_bytes(eid_str: str) -> bytes:
     """Converts string to bytes"""
     padding = "=" * (-len(eid_str) % 4)
     return base64.urlsafe_b64decode(eid_str + padding)
+
 
 def bytes_to_str(byt_str: bytes) -> str:
     """Converts secrets bytes to str"""

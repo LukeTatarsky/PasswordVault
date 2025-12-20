@@ -9,7 +9,6 @@ import sys
 import json
 import time
 import atexit
-import getpass
 import threading
 import secrets
 import string
@@ -261,7 +260,7 @@ def entry_menu(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int:
     while True:
         
         print(f"\n--- Entry Menu ---\n"
-                f"(C) Copy Password    (U) Copy Account\n"
+                f"(C) Copy Password    (B) Copy Account\n"
                 f"(S) Show Password    (H) Password History \n"
                 f"(A) Show All         (T) Get TOTP Code \n"
                 f"(E) Edit Entry       (QR) Show TOTP QR code \n"
@@ -270,7 +269,7 @@ def entry_menu(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int:
         choice_2 = input().strip().lower()
 
         # == COPY PASSWORD ===================================
-        if choice_2 == "u":
+        if choice_2 == "b":
             entry_data = get_entry_data(encrypted_entries, key, eid)
             user = entry_data.get("account", "") if entry_data else ""
             copy_to_clipboard(user, timeout=0, prompt=False)
@@ -328,9 +327,10 @@ def entry_menu(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int:
             if totp_key:
                 show_totp_code(totp_key)
                 totp_key = b"\x00" * len(totp_key)
+                del totp_key
             else:
                 print("No TOTP key available.")
-            del totp_key
+            
 
         # == EDIT ENTRY =======================================
         elif choice_2 == "e":
@@ -351,10 +351,11 @@ def entry_menu(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int:
                 issuer=get_entry_data(encrypted_entries, key, eid).get("site")
                 label=get_entry_data(encrypted_entries, key, eid).get("account")
                 show_totp_qr(secret, label, issuer)
+                secret = b"\x00" * len(secret)
+                del secret
             else:
                 print("No TOTP key available")
-            secret = b"\x00" * len(secret)
-            del secret
+            
 
         else:
             print("\rInvalid Choice\n", flush=True)
@@ -482,13 +483,9 @@ def wipe_terminal():
 def main():
     global salt
     print("- Password Manager —\n")
-    master_pw = getpass.getpass("Master password: ").encode(UTF8)
 
-    key, encrypted_entries, salt = load_vault(master_pw)
-
-    # Best effort to clear Strings. Python Strings are imutable.
-    master_pw = b"\x00" * len(master_pw)
-    del master_pw
+    # Main Entry point
+    key, encrypted_entries, salt = load_vault()
     
     # clears clipboard on exit
     atexit.register(clear_clipboard_history)
@@ -513,6 +510,7 @@ def main():
             if not site:
                 print("Site name cannot be empty!")
                 continue
+            
             account = input("Account: ").strip()
 
             note = get_note_from_user()
@@ -595,11 +593,15 @@ def main():
         # == OPTIONS ===============================================
         elif choice == "9":
             print()
-            print(f"  change_pass - Changes master password and Re-encrypts all entries.")
-            print(f"  audit_vault - Performs an audit on all passwords contained in vault.")
-            print(f"  export_json - Exports vault in plaintext for backup.")
-            print(f"  import_json - Imports previously exported vault from backup.")
-            print(f"  import_csv  - Imports data from other password managers.")    
+            print(f"  change_pass      - Changes master password and re-encrypts all entries.")
+            print(f"  audit_vault      - Performs an audit on all passwords contained in vault.")
+            print()
+            print(f"  export_json      - Exports vault in plaintext for backup.")
+            print(f"  export_portable  - Exports vault in portable mode.")
+            print()
+            print(f"  import_json      - Imports previously exported vault from backup.")
+            print(f"  import_portable  - Imports a portable mode vault.")
+            print(f"  import_csv       - Imports data from other password managers.")    
 
         # == CHANGE MASTER PW ===================================
         elif choice == "change_pass":
@@ -628,17 +630,23 @@ def main():
         # == IMPORT/EXPORT ===================================
         # In development
         elif choice == "export_json":
-            timestamp = pendulum.now().format(DT_FORMAT_EXPORT)
-            export_json(f"vault_export_{timestamp}.json", key, encrypted_entries, salt)
+            export_json()
+
+        elif choice == "export_portable":
+            export_portable()
 
         elif choice == "import_csv":
             print("Used to populate the vault.")
             filename = input("Enter CSV filename to import: ").strip()
-            import_csv(f"{filename}.csv", encrypted_entries, key, salt)
+            import_csv(f"{filename}.csv", encrypted_entries, key)
 
         elif choice == "import_json":
             filename = input("Enter JSON filename to import: ").strip()
-            import_exported_json(f"{filename}.json", encrypted_entries, key, salt)
+            import_json(f"{filename}.json", encrypted_entries, key)
+
+        elif choice == "import_portable":
+            filename = input("Enter JSON filename to import: ").strip()
+            import_portable(f"{filename}.json", encrypted_entries, key)
 
         else:
             print("Invalid Choice")

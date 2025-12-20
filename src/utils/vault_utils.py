@@ -13,86 +13,210 @@ from cryptography.exceptions import InvalidTag
 
 from config.config_vault import *
 from .crypto_utils import *
+from .tpm_utils import create_tpm_key, tpm_decrypt, tpm_encrypt
+
+logger = logging.getLogger(__name__)
 
 # globals
 salt = b''
-canary_id = ''
+sealed_pepper = b''
+canary_id = '' # str
 
-def load_vault(master_pw: str) -> Tuple[bytes, Dict[str, str], bytes]:
+
+def create_vault() -> Tuple[bytes, Dict[str, str], bytes]:
     """
-    Load or create the encrypted password vault.
+    Create a new encrypted password vault.
 
-    On first run, this function creates a new vault file containing a
-    randomly generated salt and an encrypted canary value used for
-    later master password verification.
+    Prompts the user to choose to use TPM-protected mode,
+    derives a master key from the user's password, initializes a canary value,
+    and writes the new vault to disk.
 
-    On subsequent runs, the vault is loaded from disk, a key is derived
-    from the provided master password and stored salt, and the password
-    is verified by decrypting the canary value. The program exits if
-    verification fails.
-
-    Args:
-        master_pw: Master password provided by the user.
+    In TPM mode, a random pepper is generated, sealed using the TPM, and later
+    combined with the master password during key derivation. The initialized
+    vault is written to disk before returning.
 
     Returns:
         A tuple containing:
-            - Derived master key.
-            - Dictionary of encrypted entries mapping entry IDs to tokens.
+            - Derived encryption key.
+            - Empty dictionary for encrypted vault entries.
             - Salt used for key derivation.
 
     Raises:
-        SystemExit: If the vault is corrupted or the master password is incorrect.
+        SystemExit: If TPM pepper sealing fails.
     """
-    global salt, canary_id
+    global salt, sealed_pepper, canary_id
+
+    print ("\n Would you like to enable TPM protection? (Vault becomes bound to this device.)")
+    choice = input(" (y/n): ").strip()
+
+    # Build the vault
+    salt = secrets.token_bytes(SALT_LEN)
+    canary_id = bytes_to_str(secrets.token_bytes(EID_LEN))
+    vault = {
+            "vault_version": VERSION,
+            "salt": base64.urlsafe_b64encode(salt).decode(),
+            "canary_id": canary_id,
+            "entries": {}
+        }
+
+    # Get a master password from user and derive the key used for encryption.
+    master_pw = getpass.getpass("Master password: ").encode(UTF8)
+    confirm_pw = getpass.getpass("Confirm master password: ").encode(UTF8)
+    if master_pw != confirm_pw:
+        print("Passwords do not match.")
+        sys.exit(1)
+    del confirm_pw
+
+    # Create portable mode vault
+    if choice == "n":
+        # Get a key using only the master password
+        key = derive_key(master_pw, salt)
+        del master_pw
+
+        # Add the encrypted canary
+        vault["canary"] = encrypt(KEY_CHECK_STRING, key, canary_id)
+
+    # Create TPM enabled vault
+    elif choice == "y":
+        # Try to create the TPM key. Required on first run. 
+        # If it has been created before, failure is expected.
+        # True errors will be caught by tpm_encrypt()
+        try:
+            create_tpm_key()
+        except Exception:
+            pass
+
+        # Try to encrypt the pepper, this will access the TPM key.
+        # If it fails, then most likely the key was unable to be created above.
+        try:
+            pepper = secrets.token_bytes(SALT_LEN)
+            vault["sealed_pepper"] = bytes_to_str(tpm_encrypt(pepper))
+        except Exception as e:
+            msg = f"Error accessing TPM key. Could not create TPM vault. {e}"
+            print(msg)
+            now = pendulum.now().to_iso8601_string()
+            logger.error(f"[{now}] {msg}\n")
+            time.sleep(2)
+            sys.exit(1)
+
+        peppered_pw = pepper_pw(master_pw, pepper)
+        del pepper, master_pw
+
+        key = derive_key(peppered_pw, salt)
+
+        # Add the encrypted canary and sealed pepper
+        vault["canary"] = encrypt(KEY_CHECK_STRING, key, canary_id)
+        
+    
+    else:
+        print("Invalid choice. Please enter 'y' or 'n'.")
+        sys.exit(1)
+
+    # Sanity check before writing the file
+    if "canary" not in vault:
+        print("Vault creation failed.")
+        sys.exit(1)
+
+    # Save the vault to disk
+    with VAULT_FILE.open("w", encoding=UTF8) as f:
+        json.dump(vault, f, indent=2)
+
+    # Save the global
+    sealed_pepper = vault["sealed_pepper"] if choice == "y" else b''
+
+    return key, {}, salt
+
+def load_vault(master_pw=None) -> Tuple[bytes, Dict[str, str], bytes]:
+    """
+    Loads the encrypted password vault.
+
+    If the vault file does not exist, a new vault is created and initialized.
+    If the vault exists, it is loaded from disk, the stored salt is extracted,
+    and a master key is derived from the provided (or prompted) master password.
+
+    If TPM mode is enabled, a sealed pepper is decrypted using the TPM and
+    combined with the master password before key derivation. The master
+    password is verified by decrypting a canary value stored in the vault.
+    The program exits if verification fails or the vault is corrupted.
+
+    Args:
+        master_pw: Optional master password provided by the caller. If not
+            provided, the user is prompted interactively.
+
+    Returns:
+        A tuple containing:
+            - Derived encryption key.
+            - Dictionary of encrypted vault entries.
+            - Salt used for key derivation.
+
+    Raises:
+        SystemExit: If the vault is corrupted, unreadable, or the master
+            password verification fails.
+    """
+    global salt, canary_id, sealed_pepper
     # ==============================================================
     # 1. Create new vault if none exists
     # ==============================================================
-    if not os.path.exists(VAULT_FILE):
-        print("Creating new password vault...")
-        salt = secrets.token_bytes(SALT_LEN)
-        key = derive_key(master_pw, salt)
-
-        # Create an ID for the canary.
-        canary_id = bytes_to_str(secrets.token_bytes(EID_LEN))
-
-        vault = {
-            "salt": base64.urlsafe_b64encode(salt).decode(),
-            "canary_id": canary_id,
-            "canary": encrypt(KEY_CHECK_STRING, key, canary_id),
-            "entries": {}
-        }
-        with open(VAULT_FILE, "w", encoding=UTF8) as f:
-            json.dump(vault, f, indent=2)
-
-        return key, {}, salt
+    if not VAULT_FILE.exists():
+        print ("\n No Vault found. Creating new vault.")
+        return create_vault()
 
     # ==============================================================
     # 2. Load existing vault
     # ==============================================================
+    # Open the vault file
     try:
-        with open(VAULT_FILE, encoding=UTF8) as f:
+        with VAULT_FILE.open("r", encoding=UTF8) as f:
             vault: Dict[str, Any] = json.load(f)
     except json.JSONDecodeError:
         msg = "Vault file is not valid JSON or is corrupted!"
         print(msg)
         now = pendulum.now().to_iso8601_string()
-        logging.error(f"[{now}] {msg}\n")
-        time.sleep(2) 
+        logger.error(f"[{now}] {msg}\n")
+        time.sleep(2)
         sys.exit(1)
 
-    # Extract and decode stored salt
+    # Extract stored salt
     try:
         salt = base64.urlsafe_b64decode(vault["salt"])
-    except (KeyError, InvalidTag, base64.binascii.Error):
-        msg = "Vault is corrupted: missing or invalid salt!"
+
+    except Exception as e:
+        msg = f"Vault is corrupted: missing or invalid salt! \n {e}"
         print(msg)
-        time.sleep(3)
+        time.sleep(1)
         now = pendulum.now().to_iso8601_string()
-        logging.error(f"[{now}] {msg}\n")
+        logger.error(f"[{now}] {msg}\n")
         sys.exit(1)
 
-    # Derive key from user password + stored salt
-    key = derive_key(master_pw, salt)
+    # During vault export, master password is provided
+    if master_pw is None:
+        # Prompt user for password
+        master_pw = getpass.getpass("Master password: ").encode(UTF8)
+
+    # If vault is saved with TPM mode
+    if "sealed_pepper" in vault:
+        # Extract and decrypt the sealed pepper
+        try:
+            sealed_pepper = str_to_bytes(vault["sealed_pepper"])
+            pepper = tpm_decrypt(sealed_pepper)
+
+            peppered_pw = pepper_pw(master_pw, pepper)
+            del master_pw, pepper
+        except Exception as e:
+            msg = f"Error: error occured while decrpyting sealed pepper. \n{e}"
+            print(msg)
+            time.sleep(1)
+            now = pendulum.now().to_iso8601_string()
+            logger.error(f"[{now}] {msg}\n")
+            sys.exit(1)
+
+        key = derive_key(peppered_pw, salt)
+        del peppered_pw
+
+    # Vault is saved in Portable Mode
+    else:
+        key = derive_key(master_pw, salt)
+        del master_pw
 
     # ==============================================================
     # 3. Verify master password using the canary
@@ -101,7 +225,7 @@ def load_vault(master_pw: str) -> Tuple[bytes, Dict[str, str], bytes]:
         msg = "Vault corrupted: missing canary!"
         print(msg)
         now = pendulum.now().to_iso8601_string()
-        logging.error(f"[{now}] {msg}\n")
+        logger.error(f"[{now}] {msg}\n")
         sys.exit(1)
 
     try:
@@ -112,15 +236,16 @@ def load_vault(master_pw: str) -> Tuple[bytes, Dict[str, str], bytes]:
             msg = "Wrong master password!"
             print(msg)
             now = pendulum.now().to_iso8601_string()
-            logging.error(f"[{now}] {msg}\n")
-            time.sleep(3)
+            logger.error(f"[{now}] {msg}\n")
+            time.sleep(2)
             sys.exit(1)
+
     except InvalidTag:
         msg = "Wrong master password or vault is corrupted!"
         print(msg)
-        time.sleep(3)
+        time.sleep(2)
         now = pendulum.now().to_iso8601_string()
-        logging.error(f"[{now}] {msg}\n")
+        logger.error(f"[{now}] {msg}\n")
         sys.exit(1)
 
     # ==============================================================
@@ -141,21 +266,24 @@ def save_vault(encrypted_entries: dict[str, str], key: bytes) -> None:
     Args:
         encrypted_entries: Mapping of entry IDs to encrypted tokens.
         key: Derived master key used for encryption.
-        salt: Salt used for key derivation.
 
     Side Effects:
         Atomically overwrites the vault file on disk.
+        Uses global vault metadata (salt, canary_id, sealed_pepper).
     """
     vault = {
+        "vault_version": VERSION,
         "salt": base64.urlsafe_b64encode(salt).decode("ascii"),
         "canary_id": canary_id,
-        "canary": encrypt(KEY_CHECK_STRING, key, canary_id),
-        "entries": encrypted_entries
+        "canary": encrypt(KEY_CHECK_STRING, key, canary_id)
     }
+    if sealed_pepper != b'':
+        vault["sealed_pepper"] = bytes_to_str(sealed_pepper)
+    vault["entries"] = dict(encrypted_entries)
 
     # Write to temporary file first.
-    tmp = VAULT_FILE + ".tmp"
-    with open(tmp, "w") as f:
+    tmp = VAULT_FILE.with_suffix(VAULT_FILE.suffix + ".tmp")
+    with open(tmp, "w", encoding=UTF8) as f:
         json.dump(vault, f, indent=2)
         f.flush()
         os.fsync(f.fileno()) # force to disk
@@ -194,10 +322,14 @@ def list_entries(encrypted_entries: dict[str, str], key: bytes,
     if not encrypted_entries:
         print("Empty vault — no entries yet.")
         time.sleep(0.5)
-        return
+        return []
     
     # Temporary dict: eid → (site, account)
     display_data: dict[str, tuple[str, str]] = {}
+    
+    if query:
+        query = query.lower().strip()
+        terms = query.split()
 
     for eid, blob in encrypted_entries.items():
         try:
@@ -205,8 +337,6 @@ def list_entries(encrypted_entries: dict[str, str], key: bytes,
             site = data.get("site", "")
             account = data.get("account", "")
             note = data.get("note", "")
-
-            data.clear()
             del data
 
             # Build searchable text
@@ -214,9 +344,6 @@ def list_entries(encrypted_entries: dict[str, str], key: bytes,
             
             # Filter if searching
             if query:
-                query = query.lower().strip()
-                terms = query.split()
-            
                 # Keep entry only if ALL words appear somewhere
                 if not all(term in searchable_str for term in terms):
                     continue
@@ -224,39 +351,40 @@ def list_entries(encrypted_entries: dict[str, str], key: bytes,
             display_data[eid] = (site, account)
             del searchable_str, note, account, site
 
-        except Exception:
+        except Exception as e:
             # only show corrupted if not searching
             if not query:
                 display_data[eid] = ("corrupted", "")
+                logger.error(f"[{pendulum.now().to_iso8601_string()}] corrupted entry {eid}: {e}\n")
 
     if not display_data:
         print("  No entries found.")
-        return
+        return []
     
     # Sort by site , then account
     sorted_entries = sorted(
         display_data.items(),
-        key=lambda entry: (entry[1][0].lower(), entry[1][1].lower() or "")
+        key=lambda entry: (entry[1][0].lower(), entry[1][1].lower())
     )
-    display_data.clear()
     del display_data
 
     print(SEP_SM)
     print (f" {'Entry':>5}   → {'Site':^{SITE_LEN}}  {'Account':^{ACCOUNT_LEN}}")
     print(SEP_SM)
 
-    i = 0
-    for eid, (site, account) in sorted_entries:
+    eid_list: list[str] = []
+
+    for i, (eid, (site, account)) in enumerate(sorted_entries):
         site = site if len(site) <= SITE_LEN else site[:SITE_LEN-3] + "..."
         account = account if len(account) <= ACCOUNT_LEN else account[:ACCOUNT_LEN-3] + "..."
         # Print starting at 1 for ease of use. Subtract 1 when calling display
         print(f"{i+1:>6}   → {site:^{SITE_LEN}}  {account:^{ACCOUNT_LEN}}")
         # Only return a list of eid's
-        sorted_entries[i] = eid
-        i+=1
+        eid_list.append(eid)
+
         del site, account
 
-    return sorted_entries
+    return eid_list
 
 def get_entry_data(entries: dict[str, str], key: bytes, eid: str) -> dict[str, object]:
     """
@@ -480,7 +608,7 @@ def change_master_password() -> None:
         - Empty passwords are rejected.
         - Sensitive password material is wiped from memory when possible.
     """
-    global salt, canary_id
+    global salt, canary_id, sealed_pepper
     print("\n=== Change Master Password ===")
 
     old_pw = getpass.getpass("Current master password: ").encode(UTF8)
@@ -494,7 +622,7 @@ def change_master_password() -> None:
             print("Master password cannot be empty!")
             return
 
-        # 1. Try to load with the old password (this also verifies it)
+        # Try to load with the old password (this also verifies it)
         try:
             temp_key, temp_entries, _ = load_vault(old_pw)
         except SystemExit:
@@ -502,14 +630,22 @@ def change_master_password() -> None:
 
         print("Current password verified. Re-encrypting all entries...")
 
-        # 2. Derive a new salt and key from the new password
+        # Derive a new salt and key from the new password
         salt = secrets.token_bytes(SALT_LEN)
-        new_key = derive_key(new_pw, salt)
+
+        # Pepper the password with new random bits
+        pepper = secrets.token_bytes(SALT_LEN)
+        
+        sealed_pepper = tpm_encrypt(pepper)
+
+        peppered_pw = pepper_pw(new_pw, pepper)
+        
+        new_key = derive_key(peppered_pw, salt)
 
         # Generate a new canary ID
         canary_id = bytes_to_str(secrets.token_bytes(EID_LEN))
 
-        # 3. Decrypt and re-encrypt every entry with the new key
+        # Decrypt and re-encrypt every entry with the new key
         new_encrypted_entries: Dict[str, str] = {}
         for eid, old_blob in temp_entries.items():
             try:
@@ -522,18 +658,20 @@ def change_master_password() -> None:
             except InvalidTag:
                 print(f"\nFailed to decrypt entry {eid}")
                 print("Aborting password change.")
+                logger.error(f"[{pendulum.now().to_iso8601_string()}] corrupted entry {eid}. Aborting password change")
                 return
             except Exception as e:
                 print(f"\nFailed to re-encrypt entry {eid}: {e}")
                 print("Aborting password change.")
+                logger.error(f"[{pendulum.now().to_iso8601_string()}] corrupted entry {eid}. Aborting password change")
                 return
             
-        # 4. Save with the new salt and new encrypted blobs
+        # Save with the new salt and new encrypted blobs
         save_vault(new_encrypted_entries, new_key)
         print("Master password changed successfully!")
     except Exception as e:
         print (f"Error: {e}")
-        logging.error(f"Error while changing password. {e}")
+        logger.error(f"[{pendulum.now().to_iso8601_string()}] Error while changing password. {e}")
     finally:
         old_pw = secrets.token_bytes(len(old_pw))
         new_pw = secrets.token_bytes(len(new_pw))

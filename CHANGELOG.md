@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [1.3.0] — 2025-12-19
+
+### Added
+- Optional TPM protection added.
+- Ability to export vault in portable mode. Removes TPM protection from the export.
+- Ability to import a portable mode encrypted vault. 
+
+### Migration Notes
+- Existing vaults can be migrated using the provided import tools.
+
+---
 
 ## [1.2.0] — 2025-12-17
 

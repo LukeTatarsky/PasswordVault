@@ -86,7 +86,12 @@ def strength_analysis(password: str,*,
     """
     if not password:
         return -1
-    
+    if len(password) >= 150:
+        cut_pw = password[:150]
+        del password
+        password = cut_pw
+        del cut_pw    
+
     results = zxcvbn(password, max_length=150)
     score = results['score']
 
@@ -117,29 +122,17 @@ def strength_analysis(password: str,*,
 
 def severity(entry):
     """
-    Computes a sortable severity key for a vault entry.
+    Return a sortable severity key for a vault entry.
 
-    Produces a tuple that can be used as a sorting key to
-    prioritize password issues. Sorting is performed lexicographically
-    on the returned tuple, with lower values indicating higher severity.
-
-    Severity priority order:
-      1. Password exposures (higher count = higher severity)
-      2. Password strength (lower strength = higher severity)
-      3. Password reuse count (higher count = higher severity)
-
-    Untested values (None) are handled safely and sorted last.
+    Entries are ranked by exposure count (higher first), password strength
+    (lower first), and reuse count (higher first). Missing values are handled
+    safely and sorted last.
 
     Args:
-        entry (dict): A vault entry containing an "issues" dictionary
-            with optional keys:
-            - "strength" (int | None): Password strength score.
-            - "exposures" (int | None): Number of known exposures.
-            - "reused" (int | None): Number of times the password is reused.
+        entry: Vault entry containing an "issues" dictionary.
 
     Returns:
-        tuple[int, int, int]: A tuple suitable for use as a sort key:
-            (exposures_priority, strength_priority, reuse_priority).
+        A tuple usable as a sort key.
     """
     issues = entry["issues"]
 
@@ -202,7 +195,7 @@ def audit_vault(encrypted_entries, key: bytes,
             - "reused" (int | None)
             - "exposures" (int | None)
     """
-    
+    print (" Auditing passwords...")
     pw_groups = defaultdict(list)
     results = {}
 
@@ -355,8 +348,8 @@ def audit_vault(encrypted_entries, key: bytes,
         
     return final_results
 
-if __name__ == "__main__":
+# if __name__ == "__main__":
     
-    password = 'sde3444ter3r4'
-    print (f"\n Password score (0-5) for {password}: {strength_analysis(password,show_crack_times=True)}")
-    print (f"\n number of entries found in database for {password}:  {pwned_password_count(password)}")
+#     password = 'sde3444ter3r4'
+#     print (f"\n Password score (0-5) for {password}: {strength_analysis(password,show_crack_times=True)}")
+#     print (f"\n number of entries found in database for {password}:  {pwned_password_count(password)}")

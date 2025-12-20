@@ -5,50 +5,146 @@ from config.config_vault import *
 from .crypto_utils import *
 from .vault_utils import *
 
+import logging
+logger = logging.getLogger(__name__)
 """
 Under development
 """
 
-def export_json(filepath, key, encrypted_entries, salt):
+def export_portable():
     """
-    Export the entire vault to a decrypted JSON file.
+    Export the vault to a portable (non-TPM) format.
 
-    Prompts for the master password to verify authorization, decrypts all
-    vault entries, sorts them by site and account, and writes the data to a
-    plaintext JSON file.
-
-    WARNING:
-        This operation exports all passwords in plaintext. The resulting
-        file must be protected appropriately.
-
-    Args:
-        filepath: Destination path for the exported JSON file.
-        key: Master key for the current vault session.
-        encrypted_entries: Dictionary mapping entry IDs to encrypted tokens.
-        salt: Salt used for key derivation verification.
+    Verifies the master password, prompts to use a new password,
+    decrypts all entries, and re-encrypts them using a new salt 
+    and key without TPM protection. The exported vault is
+    written to a new file on disk.
 
     Returns:
-        None
+        True if the vault was exported successfully.
 
     Raises:
-        SystemExit: If the provided master password is invalid.
+        SystemExit: If the master password verification fails.
+    """
+    try:
+        # Verify master password
+        master_pw = getpass.getpass("Confirm master password: ").encode(UTF8)
+        
+        try:
+            temp_key, temp_entries, _ = load_vault(master_pw)
+        except:
+            # Lock if wrong password entered
+            print("Incorrect password. Exiting.")
+            return False
 
-    Side Effects:
-        - Prompts the user for the master password.
-        - Writes a plaintext JSON file to disk.
-        - Logs failed authentication attempts.
+        print(" Current password verified.")
+
+        # Ask if user wants to use a different password
+        c = input("\n Would you like to use a different password for this export? (y/n): ").strip()
+        if c == "y":
+            # Get new password 
+            master_pw = getpass.getpass("Enter new master password: ").encode(UTF8)
+            confirm_pw = getpass.getpass("Confirm new master password: ").encode(UTF8)
+            if master_pw != confirm_pw:
+                print (" New passwords did not match. Returning to main menu.")
+                return False
+        print(" Re-encrypting all entries...")
+
+        # Derive a new key
+        new_salt = secrets.token_bytes(SALT_LEN)
+
+        new_key = derive_key(master_pw, new_salt)
+        master_pw = secrets.token_bytes(len(master_pw))
+        del master_pw
+
+        # Generate a new canary ID
+        new_canary_id = bytes_to_str(secrets.token_bytes(EID_LEN))
+
+        # Decrypt and re-encrypt every entry with the new key
+        new_encrypted_entries: Dict[str, str] = {}
+
+        for eid, old_blob in temp_entries.items():
+            try:
+                # Decrypt with old key
+                plaintext = decrypt(old_blob, temp_key, eid)
+                # Encrypt again with new key
+                new_blob = encrypt(plaintext, new_key, eid)
+                del plaintext
+                new_encrypted_entries[eid] = new_blob
+            except InvalidTag as e:
+                msg = f"Failed to decrypt entry {eid}: {e}"
+                print(msg)
+                logger.error(f"[{pendulum.now().to_iso8601_string()}] {msg}\n")
+
+            except Exception as e:
+                msg = f"Failed to re-encrypt entry {eid}: {e}"
+                print(msg)
+                logger.error(f"[{pendulum.now().to_iso8601_string()}] {msg}\n")
+        
+        
+        # Save with the new salt and new encrypted blobs
+        vault = {
+            "vault_version": VERSION,
+            "salt": base64.urlsafe_b64encode(new_salt).decode("ascii"),
+            "canary_id": new_canary_id,
+            "canary": encrypt(KEY_CHECK_STRING, new_key, new_canary_id),
+            "entries": new_encrypted_entries
+        }
+
+        del new_key
+
+        # Save to file
+        timestamp = pendulum.now().format(DT_FORMAT_EXPORT)
+        file_name = f"password_vault_portable_{timestamp}.json"
+
+        with open(BASE_DIR / file_name, "w") as f:
+            json.dump(vault, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno()) # force to disk
+
+        missing = len(temp_entries) - len(new_encrypted_entries)
+        if missing:
+            msg = f"Vault export failed: missing {missing} entries."
+            print(msg)
+            logger.error(f"[{pendulum.now().to_iso8601_string()}] {msg}\n")
+            return False
+
+        print("Vault exported successfully!")
+        
+    except Exception as e:
+        print (f"Error: {e}")
+        logger.error(f"Error occured while exporting vault:\n {e}")
+        return False
+    
+    return True
+    
+    
+def export_json():
+    """
+    Export the vault to a decrypted JSON file.
+
+    Verifies the master password, decrypts all vault entries, and writes them
+    to a plaintext JSON file sorted for readability.
+
+    Returns:
+        True if entries were imported successfully.
+
+    Raises:
+        SystemExit: If master password verification fails.
     """
     print("\nWARNING: This will export ALL passwords and data in plain text!!!\n")
-    master_pw = getpass.getpass("Master password: ").encode(UTF8)
-    generated_key = derive_key(master_pw, salt)
-    del master_pw
 
-    if generated_key != key:
-        print ("Error: Invalid Password. Export cancelled. Exiting.")
-        msg = (f"Invalid password entered during export")
-        now = pendulum.now().to_iso8601_string()
-        logging.error(f"[{now}] {msg}\n")
-        sys.exit(1)
+    # Verify master password
+    master_pw = getpass.getpass("Confirm master password: ").encode(UTF8)
+    
+    try:
+        key, encrypted_entries, _ = load_vault(master_pw)
+    except:
+        # Lock if wrong password entered
+        print("Incorrect password. Exiting.")
+        return False
+
+    print("Current password verified. Re-encrypting all entries...")
 
     try:
         # Temporary list to hold decrypted entries
@@ -62,8 +158,8 @@ def export_json(filepath, key, encrypted_entries, salt):
                 # store tuple (eid, data) for sorting later
                 decrypted_items.append((eid, data))
 
-            except Exception as ex:
-                print(f"Failed to decrypt entry {eid}: {ex}")
+            except Exception as e:
+                print(f"Failed to decrypt entry {eid}: {e}")
 
         # Sort entries by site then account (case-insensitive)
         decrypted_items.sort(
@@ -79,11 +175,13 @@ def export_json(filepath, key, encrypted_entries, salt):
             "entries": {}
         }
 
+        # Define json order.
+        json_order = ["site", "account", "password", "note", "totp", "created_date", "edited_date"]
+
         # Write sorted entries into the dict
         for eid, data in decrypted_items:
 
             # Force same order for all entries
-            json_order = ["site", "account", "password", "note", "totp", "created_date", "edited_date"]
             ordered_entry = {k: data[k] for k in json_order if k in data}
 
             # Order doesnt matter for remaining keys
@@ -93,26 +191,33 @@ def export_json(filepath, key, encrypted_entries, salt):
 
             vault["entries"][eid] = ordered_entry
 
+        
         # Save to file
-        with open(filepath, "w", encoding=UTF8) as f:
-            json.dump(vault, f, indent=4)
+        timestamp = pendulum.now().format(DT_FORMAT_EXPORT)
+        file_name = f"password_vault_export_{timestamp}.json"
+
+        with open(BASE_DIR / file_name, "w", encoding=UTF8) as f:
+            json.dump(vault, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno()) # force to disk
 
         # Error / Success message 
         if len(decrypted_items) != len(encrypted_entries):
-            print (" Error Exporting entries.")
+            print (" Error Exporting all entries. Check for corrupted entries.")
         else:
             print (" Vault exported successfully.")
 
     except Exception as e:
         print(f"Failed to export vault: {e}")
+        return False
 
     finally:
         decrypted_items = []
-        data = None
+        del data
 
-    return
+    return True
 
-def import_exported_json(filepath, encrypted_entries, key, salt):
+def import_json(filepath, encrypted_entries, key):
     """
     Import entries from a previously exported plaintext JSON file.
 
@@ -124,7 +229,6 @@ def import_exported_json(filepath, encrypted_entries, key, salt):
         filepath: Path to the exported JSON file.
         encrypted_entries: In-memory encrypted vault entries.
         key: Active master key.
-        salt: Current vault salt (unused but required for interface symmetry).
 
     Returns:
         True if entries were imported successfully, False otherwise.
@@ -135,24 +239,28 @@ def import_exported_json(filepath, encrypted_entries, key, salt):
     """
     try:
         # Load JSON file
-        with open(filepath, "r", encoding=UTF8) as f:
+        with open(BASE_DIR / filepath, "r", encoding=UTF8) as f:
             vault = json.load(f)
+
+        # Perform intersection of cannot exist and vault keys, as sets.
+        #  If any of them are there, its not a plain text vault
+        cannot_exist = {"salt", "canary", "canary_id", "sealed_pepper"}
+        if cannot_exist & vault.keys():
+            print("Error: this is an encrypted vault")
+            return False
 
         imported_count = 0
 
         # Loop plaintext entries
-        for old_eid, entry_obj in vault.get("entries", {}).items():
+        for _, entry_obj in vault.get("entries", {}).items():
 
             # Convert entry dict -> JSON plaintext string
             plaintext_json = json.dumps(entry_obj)
 
             # Generate a new unique ID
-            eid = secrets.token_bytes(EID_LEN)
+            eid = bytes_to_str(secrets.token_bytes(EID_LEN))
             while eid in encrypted_entries:
-                eid = secrets.token_bytes(EID_LEN)
-
-            # Convert eid bytes to string
-            eid = bytes_to_str(eid)
+                eid = bytes_to_str(secrets.token_bytes(EID_LEN))
             
             # Encrypt with *current* master key
             encrypted_blob = encrypt(plaintext_json, key, eid)
@@ -160,19 +268,106 @@ def import_exported_json(filepath, encrypted_entries, key, salt):
             # Append into current vault
             encrypted_entries[eid] = encrypted_blob
             imported_count += 1
+            del entry_obj
 
         save_vault(encrypted_entries, key)
         print(f"Imported {imported_count} entries from JSON.")
-        return True
-
+        
     except Exception as e:
         print(f"Failed to import exported JSON: {e}")
         return False
+
+    return True
+
+def import_portable(filepath, encrypted_entries, key):
+    """
+    Import entries from a portable (non-TPM) vault file.
+
+    Verifies the portable vault password, decrypts each entry, re-encrypts it
+    with the current vault key, and adds it to the active vault.
+
+    Args:
+        filepath: Path to the portable vault JSON file.
+        encrypted_entries: Current vault entries to append imported items to.
+        key: Active vault encryption key.
+
+    Returns:
+        True if entries were imported successfully.
+
+    Raises:
+        SystemExit: If the portable vault is invalid or password verification fails.
+    """
+    try:
+        # Load JSON file
+        with open(BASE_DIR / filepath, "r", encoding=UTF8) as f:
+            vault = json.load(f)
+
+        required = {"salt", "canary", "canary_id", "entries"}
+        if not required.issubset(vault):
+            print("Error: this is not a valid vault")
+            return False
+        
+        imported_count = 0
+
+        # Verify master password
+        vault_pw = getpass.getpass("Enter Vault Password: ").encode(UTF8)
+        vault_salt = str_to_bytes(vault.get("salt", ""))
+        vault_key = derive_key(vault_pw, vault_salt)
+        del vault_pw
+
+        try:
+            canary_id = vault["canary_id"]
+            decrypted_canary = decrypt(vault["canary"], vault_key, canary_id)
+
+            if decrypted_canary != KEY_CHECK_STRING:
+                msg = "Wrong master password!"
+                print(msg)
+                logger.error(f"[{pendulum.now().to_iso8601_string()}] {msg}\n")
+                return False
+
+        except InvalidTag:
+            msg = "Wrong master password or vault is corrupted!"
+            print(msg)
+            logger.error(f"[{pendulum.now().to_iso8601_string()}] {msg}\n")
+            return False
+
+        # load entries
+        for old_eid, blob in vault.get("entries", {}).items():
+            try:
+                entry_data = decrypt(blob, vault_key, old_eid)
+
+                # Generate a new unique ID
+                new_eid = secrets.token_bytes(EID_LEN)
+                while new_eid in encrypted_entries:
+                    new_eid = secrets.token_bytes(EID_LEN)
+
+                # Convert eid bytes to string
+                new_eid = bytes_to_str(new_eid)
+                
+                # Encrypt with *current* master key
+                encrypted_blob = encrypt(entry_data, key, new_eid)
+                del entry_data
+
+                # Append into current vault
+                encrypted_entries[new_eid] = encrypted_blob
+                imported_count += 1
+            except (InvalidTag, KeyError, ValueError):
+                print(f" Error: entry {old_eid} corrupted")
+
+
+        save_vault(encrypted_entries, key)
+        print(f"Imported {imported_count} entries from JSON.")
+
+    except Exception as e:
+        print(f"Failed to import exported JSON: {e}")
+        logger.error(f"[{pendulum.now().to_iso8601_string()}] {e}\n")
+        return False
     finally:
-        vault = None
-        entry_obj = None
+        del vault_key, vault
+
+    return True
     
-def import_csv(filepath, encrypted_entries, key, salt):
+def import_csv(filepath, encrypted_entries, key):
     """
     Import vault entries from a CSV file.
 
@@ -184,7 +379,6 @@ def import_csv(filepath, encrypted_entries, key, salt):
         filepath: Path to the CSV file to import.
         encrypted_entries: In-memory encrypted vault entries.
         key: Active master key.
-        salt: Current vault salt (unused but retained for consistency).
 
     Returns:
         True if the import completed successfully.
@@ -198,11 +392,17 @@ def import_csv(filepath, encrypted_entries, key, salt):
         - Field mappings are currently hardcoded for known exporters.
         - All imported entries receive new timestamps and IDs.
     """
+    try:
+        with open(BASE_DIR / filepath, "r", encoding=UTF8) as f:
+            delimiter = ','
+    except:
+        print( " File not found")
+        return False
+    
     with open(filepath, "r", encoding=UTF8) as f:
         delimiter = ','
         print (f"Importing from CSV... Delimiter = '{delimiter}'")
         csv_reader = csv.DictReader(f, delimiter=delimiter)
-        curr_time = pendulum.now().to_iso8601_string()
         imported_count = 0
 
         # Map other export field names to field names used by PasswordVault_CLI.
@@ -234,8 +434,8 @@ def import_csv(filepath, encrypted_entries, key, salt):
                         # Get whatever else is stored
                         entry_obj[field] = value
 
-            entry_obj["created_date"] = curr_time
-            entry_obj["edited_date"] = curr_time
+            entry_obj["created_date"] = pendulum.now().to_iso8601_string()
+            entry_obj["edited_date"] = pendulum.now().to_iso8601_string()
             entry_obj["imported_from"] = filepath
 
             plaintext = json.dumps(entry_obj)
