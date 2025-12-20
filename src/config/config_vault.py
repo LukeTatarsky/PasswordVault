@@ -3,6 +3,7 @@
 Configuration constants
 """
 from pathlib import Path
+import sys
 # ==============================================================
 # Vault settings
 # ==============================================================
@@ -10,9 +11,23 @@ from pathlib import Path
 VERSION = "1.3.0"
 
 # Name of encrypted vault file
-BASE_DIR = Path.cwd()
-VAULT_FILE = BASE_DIR  / "password_vault.json"
+if getattr(sys, "frozen", False):
+    # PyInstaller executable
+    BASE_DIR = Path(sys.executable).resolve().parents[2]
+else:
+    # Normal Python run
+    BASE_DIR = Path(__file__).resolve().parents[2]
+    
+VAULT_DIR = BASE_DIR / "vault"
+VAULT_DIR.mkdir(exist_ok=True)
 
+EXPORT_DIR = BASE_DIR / "vault_exports"
+EXPORT_DIR.mkdir(exist_ok=True)
+
+IMPORT_DIR = BASE_DIR / "vault_imports"
+IMPORT_DIR.mkdir(exist_ok=True)
+
+VAULT_FILE = VAULT_DIR / "password_vault.json"
 
 # Canary to verify master password. Do not change once vault is created.
 KEY_CHECK_STRING = "MasterKeyValidation"
@@ -29,7 +44,6 @@ ARGON_HASH_LEN = 32        # bytes - Encryption key size - DO NOT CHANGE
 
 # ChaCha20Poly1305 nonce length. DO NOT CHANGE
 NONCE_LEN = 12
-
 
 
 # ==============================================================

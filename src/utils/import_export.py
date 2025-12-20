@@ -1,11 +1,13 @@
 import secrets
 import getpass
 import csv
+import sys
+import logging
+
 from config.config_vault import *
 from .crypto_utils import *
 from .vault_utils import *
 
-import logging
 logger = logging.getLogger(__name__)
 """
 Under development
@@ -98,7 +100,8 @@ def export_portable():
         timestamp = pendulum.now().format(DT_FORMAT_EXPORT)
         file_name = f"password_vault_portable_{timestamp}.json"
 
-        with open(BASE_DIR / file_name, "w") as f:
+
+        with open(EXPORT_DIR / file_name, "w") as f:
             json.dump(vault, f, indent=2)
             f.flush()
             os.fsync(f.fileno()) # force to disk
@@ -191,13 +194,15 @@ def export_json():
                     ordered_entry[k] = v
 
             vault["entries"][eid] = ordered_entry
+            del data
 
         
         # Save to file
         timestamp = pendulum.now().format(DT_FORMAT_EXPORT)
         file_name = f"password_vault_export_{timestamp}.json"
 
-        with open(BASE_DIR / file_name, "w", encoding=UTF8) as f:
+        
+        with open(EXPORT_DIR / file_name, "w", encoding=UTF8) as f:
             json.dump(vault, f, indent=2)
             f.flush()
             os.fsync(f.fileno()) # force to disk
@@ -214,7 +219,6 @@ def export_json():
 
     finally:
         decrypted_items = []
-        del data
 
     return True
 
@@ -240,7 +244,7 @@ def import_json(filepath, encrypted_entries, key):
     """
     try:
         # Load JSON file
-        with open(BASE_DIR / filepath, "r", encoding=UTF8) as f:
+        with open(IMPORT_DIR / filepath, "r", encoding=UTF8) as f:
             vault = json.load(f)
 
         # Perform intersection of cannot exist and vault keys, as sets.
@@ -300,7 +304,7 @@ def import_portable(filepath, encrypted_entries, key):
     """
     try:
         # Load JSON file
-        with open(BASE_DIR / filepath, "r", encoding=UTF8) as f:
+        with open(IMPORT_DIR / filepath, "r", encoding=UTF8) as f:
             vault = json.load(f)
 
         required = {"salt", "canary", "canary_id", "entries"}
@@ -394,13 +398,13 @@ def import_csv(filepath, encrypted_entries, key):
         - All imported entries receive new timestamps and IDs.
     """
     try:
-        with open(BASE_DIR / filepath, "r", encoding=UTF8) as f:
+        with open(IMPORT_DIR / filepath, "r", encoding=UTF8) as f:
             delimiter = ','
     except:
         print( " File not found")
         return False
     
-    with open(filepath, "r", encoding=UTF8) as f:
+    with open(IMPORT_DIR / filepath, "r", encoding=UTF8) as f:
         delimiter = ','
         print (f"Importing from CSV... Delimiter = '{delimiter}'")
         csv_reader = csv.DictReader(f, delimiter=delimiter)

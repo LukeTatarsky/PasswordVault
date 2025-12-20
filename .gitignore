@@ -63,6 +63,8 @@ data/*
 password_vault.json
 bitwarden_export*
 vault_export*
+vault*/
+*.lnk
 
 # =========================
 # Practice files
