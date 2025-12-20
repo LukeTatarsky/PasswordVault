@@ -277,8 +277,11 @@ def save_vault(encrypted_entries: dict[str, str], key: bytes) -> None:
         "canary_id": canary_id,
         "canary": encrypt(KEY_CHECK_STRING, key, canary_id)
     }
-    if sealed_pepper != b'':
-        vault["sealed_pepper"] = bytes_to_str(sealed_pepper)
+    if sealed_pepper:
+        if isinstance(sealed_pepper, bytes):
+            vault["sealed_pepper"] = bytes_to_str(sealed_pepper)
+        else:
+            vault["sealed_pepper"] = sealed_pepper
     vault["entries"] = dict(encrypted_entries)
 
     # Write to temporary file first.

@@ -10,7 +10,7 @@ from pathlib import Path
 VERSION = "1.3.0"
 
 # Name of encrypted vault file
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
+BASE_DIR = Path.cwd()
 VAULT_FILE = BASE_DIR  / "password_vault.json"
 
 

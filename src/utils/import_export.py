@@ -84,6 +84,7 @@ def export_portable():
         
         # Save with the new salt and new encrypted blobs
         vault = {
+            "date_exported": pendulum.now().in_timezone('local').format(DT_FORMAT),
             "vault_version": VERSION,
             "salt": base64.urlsafe_b64encode(new_salt).decode("ascii"),
             "canary_id": new_canary_id,
