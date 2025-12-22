@@ -61,6 +61,7 @@ config_local.py
 data/*
 !data/.gitkeep
 password_vault.json
+*.vault
 bitwarden_export*
 vault_export*
 vault*/

@@ -27,7 +27,7 @@ EXPORT_DIR.mkdir(exist_ok=True)
 IMPORT_DIR = BASE_DIR / "vault_imports"
 IMPORT_DIR.mkdir(exist_ok=True)
 
-VAULT_FILE = VAULT_DIR / "password_vault.json"
+VAULT_FILE = VAULT_DIR / "passwords.vault"
 
 # Canary to verify master password. Do not change once vault is created.
 KEY_CHECK_STRING = "MasterKeyValidation"

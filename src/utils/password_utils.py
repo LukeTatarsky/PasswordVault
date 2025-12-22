@@ -1,6 +1,8 @@
 import hashlib
 import urllib.request
 import csv
+import logging
+import time
 import pendulum
 from collections import defaultdict
 
@@ -8,6 +10,7 @@ from zxcvbn import zxcvbn
 from .vault_utils import get_entry_data
 from config.config_vault import DT_FORMAT_EXPORT, SEP_LG, SITE_LEN, ACCOUNT_LEN
 
+logger = logging.getLogger(__name__)
 
 def pwned_password_count(password: str, timeout: int = 5) -> int:
     """
@@ -45,9 +48,15 @@ def pwned_password_count(password: str, timeout: int = 5) -> int:
             "User-Agent": "hibp-password-check"
         }
     )
-    # Retrieve all matched prefixes
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        body = response.read().decode("utf-8")
+    try:
+        # Retrieve all matched prefixes
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            body = response.read().decode("utf-8")
+    except Exception as e:
+        msg = f"Error: Could not reach pwnedpasswords API. {e}"
+        print(msg)
+        logger.error(f"[{pendulum.now().to_iso8601_string()}] {msg}\n")
+        return -1
 
     # Find the suffix match and get the count
     for line in body.splitlines():
@@ -241,6 +250,10 @@ def audit_vault(encrypted_entries, key: bytes,
             count = pwned_password_count(pw)
             if count > 0:
                 results[eid]["issues"]["exposures"] = count
+            elif count == -1:
+                del pw, site, account
+                time.sleep(1)
+                return []
 
         if test_reuse:
             pw_hash = hashlib.sha256(pw.encode("utf-8")).hexdigest()
@@ -317,7 +330,8 @@ def audit_vault(encrypted_entries, key: bytes,
 
             # mask accounts for export
             account = entry.get("account", "")
-            masked_account = account[:5]+ "..." if len(account) > 5 else account[:5]
+            # masked_account = account[:5]+ "..." if len(account) > 5 else account
+            masked_account = account
 
             final_results.append({
                 "site": entry.get("site", ""),
@@ -339,7 +353,7 @@ def audit_vault(encrypted_entries, key: bytes,
             with open(f"password_audit_{timestamp}.csv", "w", newline="", encoding="utf-8") as f:
                 writer = csv.DictWriter(
                     f,
-                    fieldnames=["site", "account", "strength", "reused", "exposures"]
+                    fieldnames= final_results[0].keys()
                 )
 
                 writer.writeheader()
@@ -348,8 +362,8 @@ def audit_vault(encrypted_entries, key: bytes,
         
     return final_results
 
-# if __name__ == "__main__":
+if __name__ == "__main__":
     
-#     password = 'sde3444ter3r4'
-#     print (f"\n Password score (0-5) for {password}: {strength_analysis(password,show_crack_times=True)}")
-#     print (f"\n number of entries found in database for {password}:  {pwned_password_count(password)}")
+    password = 'sde3444ter3r4'
+    print (f"\n Password score (0-5) for {password}: {strength_analysis(password,show_crack_times=True)}")
+    print (f"\n number of entries found in database for {password}:  {pwned_password_count(password)}")

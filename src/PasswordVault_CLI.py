@@ -36,10 +36,10 @@ except ImportError as e:
     missing_package = e.name if hasattr(e, "name") else "unknown package"
     print("Missing required dependency!")
     print(f"  {missing_package} is not installed")
-    logging.error(f"  {missing_package} is not installed")
+    logging.error(f"  {missing_package} is not installed. See requirements.txt")
     print("\nInstall with:")
     print("  pip install -r requirements.txt")
-    time.sleep(2)
+    time.sleep(5)
     sys.exit(1)
 
 # ==============================================================
@@ -92,12 +92,21 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int
         print("Entry corrupted — cannot edit")
         return 1
     
-    choice = 0
+    choice = ''
 
     while True:
         gc.collect()
-        if choice != '5':
+
+
+        wipe_terminal()
+
+        if choice == '5':
+            # Show all info
+            display_entry(data, show_all=True)
+        else:
+            # Show basic info
             display_entry(data, None, None, show_pass=False)
+
         print(
             f"\n--- Editing Menu --- \n"
             f"   1. Edit Site          5. Display Entry (shows all) \n"
@@ -107,8 +116,8 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int
             f"   9. Edit Recovery Keys \n"
             f"   0. Edit TOTP Key"
             )
-        
-        choice = input("\n → ").strip()
+
+        choice = input(" > ").strip()
 
         if choice == "1":
             current = data.get('site', '')
@@ -131,6 +140,8 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int
             new_pw = ask_password("New password:")
             if new_pw is None:
                 continue
+            if new_pw:
+                copy_to_clipboard(new_pw, prompt=True)
 
             # Keep password history
             pw_history = data.get("password_history", [])
@@ -139,9 +150,8 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int
             data["password_history"] = pw_history[:PASSWORD_HISTORY_LIMIT]
             data["password"] = new_pw
             pw_history.clear()
-            del pw_history
             new_pw = None
-            del new_pw
+            del new_pw, pw_history
             print("   Password updated")
 
         elif choice == "4":
@@ -156,7 +166,7 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int
             print("   Note updated")
 
         elif choice == "5":
-            display_entry(data, show_all=True)
+            continue
 
         elif choice == "6":
             if data.get("site", "").strip() == "":
@@ -168,13 +178,14 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int
                 print("   Save cancelled")
                 continue
 
-            # Update timestamp5
+            # Update timestamp
             data["edited_date"] = pendulum.now().to_iso8601_string()
 
             # Re-encrypt and save
             blob = encrypt(json.dumps(data, separators=(',', ':')), key, eid)
             encrypted_entries[eid] = blob
             save_vault(encrypted_entries, key)
+            wipe_terminal()
             print("\nEntry updated and saved successfully!")
             data.clear()
             data = None
@@ -186,15 +197,15 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int
             if confirm.strip().lower() == "del":
                 del encrypted_entries[eid]
                 save_vault(encrypted_entries, key)
-                print("Entry deleted.")
+                wipe_terminal()
+                print("\nEntry deleted.")
                 data.clear()
                 data = None
                 del data
                 return 1
-            else:
-                print("   Delete cancelled")
             
         elif choice == "8":
+            wipe_terminal()
             print("All changes discarded.")
             data.clear()
             data = None
@@ -224,7 +235,7 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int
 
         else:
             print("   Invalid option — choose 0-9")
-        
+
 
 def entry_menu(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int:
     """
@@ -253,14 +264,21 @@ def entry_menu(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int:
         - Sensitive data is cleared from memory where possible.
         - Passwords are not displayed unless explicitly requested.
     """
-    res = display_entry(encrypted_entries, key, eid)
-    if res != 0:
-        return 1
+    choice_2 = ''
+
+
+    wipe_terminal()
 
     while True:
-        
+        gc.collect()
+
+        if choice_2 == '':
+            res = display_entry(encrypted_entries, key, eid)
+            if res != 0:
+                return 1
+
         print(f"\n--- Entry Menu ---\n"
-                f"(C) Copy Password    (B) Copy Account\n"
+                f"(C) Copy Password    (U) Copy Account\n"
                 f"(S) Show Password    (H) Password History \n"
                 f"(A) Show All         (T) Get TOTP Code \n"
                 f"(E) Edit Entry       (QR) Show TOTP QR code \n"
@@ -268,14 +286,17 @@ def entry_menu(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int:
                 ,end="\n > ")
         choice_2 = input().strip().lower()
 
+        wipe_terminal()
+
         # == COPY PASSWORD ===================================
-        if choice_2 == "b":
+        if choice_2 == "u":
             entry_data = get_entry_data(encrypted_entries, key, eid)
             user = entry_data.get("account", "") if entry_data else ""
             copy_to_clipboard(user, timeout=0, prompt=False)
             user = None
             entry_data = None
             del entry_data
+            choice_2 = ''
             continue
 
         # == COPY PASSWORD ===================================
@@ -285,6 +306,7 @@ def entry_menu(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int:
             copy_to_clipboard(pw, timeout=CLIPBOARD_TIMEOUT, prompt=False)
             pw = None
             entry_data = None
+            choice_2 = ''
             continue
         
         # == SHOW PASSWORD ===================================
@@ -330,20 +352,18 @@ def entry_menu(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int:
                 del totp_key
             else:
                 print("No TOTP key available.")
-            
+            choice_2 = ''
 
         # == EDIT ENTRY =======================================
         elif choice_2 == "e":
             res = update_entry(encrypted_entries, key, eid)
+            choice_2 = ''
             if res == 1:
                 # error, back to main
                 break
-            # show entry after update
-            display_entry(encrypted_entries, key, eid)
             
-        elif choice_2 in {"", "enter", "q"}:
-            break
-        
+            
+        # == Authenticator QR code =============================   
         elif choice_2 == "qr":
             
             secret=get_entry_data(encrypted_entries, key, eid).get("totp")
@@ -355,10 +375,15 @@ def entry_menu(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int:
                 del secret
             else:
                 print("No TOTP key available")
+            choice_2 = ''
             
+
+        elif choice_2 in {"", "enter", "q"}:
+            break
 
         else:
             print("\rInvalid Choice\n", flush=True)
+            choice_2 = ''
 
     return 0
 
@@ -397,12 +422,12 @@ def copy_to_clipboard(text: str,
         print(" Nothing to copy.")
         return
     
-    if prompt and input(" Copy to clipboard? (y/n):").strip().lower() != "y":
+    if prompt and input(" Copy to clipboard? (y/n): ").strip().lower() != "y":
         return
     
     # Copy to clipboard
     pyperclip.copy(text)
-    text = " Copied!" + (f"(auto-clears in {timeout}s)" if timeout > 0 else "")
+    text = " Copied!" + (f" (auto-clears in {timeout}s)" if timeout > 0 else "")
     print(text, flush=True)
 
     if timeout <= 0:
@@ -464,10 +489,17 @@ def clear_clipboard_history(clipboard_length: int = CLIPBOARD_LENGTH):
     pyperclip.copy("Clipboard history cleared")
     return
 
+def wipe_last_lines(n: int):
+    for _ in range(n):
+        sys.stdout.write("\033[F\033[K")
+    sys.stdout.flush()
 
-def wipe_terminal():
+def wipe_terminal(force=False):
     """
-    Clear the terminal screen.
+    Clears the terminal screen if CLEAR_SCREEN set to True.
+
+    Args:
+        force: Bypasses CLEAR_SCREEN.
 
     Returns:
         None
@@ -475,7 +507,8 @@ def wipe_terminal():
     Side Effects:
         Executes a system command to clear the terminal window.
     """
-    os.system('cls' if os.name == 'nt' else 'clear')
+    if CLEAR_SCREEN and force == False:
+        os.system('cls' if os.name == 'nt' else 'clear')
 
 # ==============================================================
 # MAIN
@@ -494,7 +527,7 @@ def main():
     while True:
         gc.collect()
 
-        if CLEAR_SCREEN and choice != "9":
+        if choice != "9":
             time.sleep(0.4)
             wipe_terminal()
 

@@ -1,7 +1,6 @@
 import secrets
 import getpass
 import csv
-import sys
 import logging
 
 from config.config_vault import *
@@ -421,9 +420,13 @@ def import_csv(filepath, encrypted_entries, key):
         chrome_map = {"name": "site",
                    "username": "account",
                    "password": "password",
-                   "note": "note",
+                    "note": "note",
                    }
-        mapping = bitwarden_map
+        firefox_map = {"url": "site",
+                   "username": "account",
+                   "password": "password",
+                   }
+        mapping = chrome_map
         
         for row in csv_reader:
             entry_obj = {}
@@ -438,6 +441,16 @@ def import_csv(filepath, encrypted_entries, key):
                     else:
                         # Get whatever else is stored
                         entry_obj[field] = value
+
+            # firefox
+            # created =pendulum.from_timestamp(int(row.get("timeCreated", ""))//1000).to_date_string()
+            # last_used = pendulum.from_timestamp(int(row.get("timeLastUsed", ""))//1000).to_date_string()
+            # last_changed = pendulum.from_timestamp(int(row.get("timePasswordChanged", ""))//1000).to_date_string()
+            # date_str = f"Date created  {created}\nLast_used {last_used}\nLast Changed {last_changed}"
+            # entry_obj["note"] = date_str
+
+            # entry_obj["site"] = entry_obj["site"].removeprefix("https://")
+            # entry_obj["site"] = entry_obj["site"].removeprefix("www.")
 
             entry_obj["created_date"] = pendulum.now().to_iso8601_string()
             entry_obj["edited_date"] = pendulum.now().to_iso8601_string()

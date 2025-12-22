@@ -505,9 +505,7 @@ def display_entry(source: Dict[str, Any],
                 print(f" - {pendulum.parse(pw_entry.get('last_used','unknown date'))
                             .in_timezone('local').format(DT_FORMAT_PASS_HISTORY)} :",
                     f" {pw_entry.get('password','')}")
-                pw_entry.clear()
                 del pw_entry
-            history.clear()
             del history
             print(SEP_SM)
 

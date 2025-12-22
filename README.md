@@ -1,12 +1,8 @@
 # **PasswordVault — Secure Password Manager CLI**
 
-**PasswordVault** is an offline, cryptographically secure password manager written in Python.
+**PasswordVault** is an offline, cryptographically secure password manager written in Python. It operates offline by default and stores all data in a single encrypted vault file.
 
-It is designed with memory safety in mind, single-entry decryption, and automatic clipboard wiping.
-
-The application operates entirely offline by default and stores all secrets in a single encrypted vault file.
-
-An optional **TPM-backed protection mode** is available for users who want hardware-bound security.
+It was built as a personal tool to organize account information, improve password strength, and store data safely on a local machine without relying on any cloud service.
 
 ---
 ## **Features**
@@ -21,11 +17,10 @@ An optional **TPM-backed protection mode** is available for users who want har
 
 ### **Password Management**
 
-- Full-text search across site, account, and notes
+- Truly random password generator using Python’s `secrets` module (customizable)
 - Copy masked passwords to clipboard, auto clears after set time (configurable)
 - Password history (configurable)
 - Secure clipboard handling with auto-clear (configurable)
-- Truly random password generator using Python’s `secrets` module (customizable)
 
 ### **Two-Factor Authentication**
 
@@ -48,7 +43,7 @@ An optional **TPM-backed protection mode** is available for users who want har
 - CSV import support for migrating from other password managers and browser exports
 
 ---
-## **TPM Mode (Optional)**
+## **TPM Mode**
 
 PasswordVault supports **hardware-backed key sealing** using a **Trusted Platform Module (TPM)**. 
 
@@ -61,7 +56,6 @@ When enabled, the vault will **only unlock on the computer it was created on**.
 - Stolen or imaged disks
 - Offline brute-force attacks
 - Leaked encrypted vault files
-
 
 ### **Important Limitations of TPM Mode**
 
@@ -151,7 +145,7 @@ WIPE_CLIPBOARD = False
 
 - Create a **strong master password**
 - There is **no recovery** if the master password is lost
-- The encrypted vault is saved as `password_vault.json` in the current directory
+- The encrypted vault is saved as `passwords.vault`
 
 ---
 ## **Exporting Data**
@@ -175,6 +169,8 @@ To export in Portable Mode:
 1. Run the program
 2. Log in
 3. Type `export_portable` in the main menu
+4. Choose if you want to use the same password or a different password than the current vault.
+
 
 See Portable Mode for details.
 
