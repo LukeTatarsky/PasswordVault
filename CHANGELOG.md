@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [1.4.0] — 2025-12-29
+### Changed
+- The codebase was refactored to operate on Entry objects, centralizing encryption, serialization, and validation logic and eliminating ad-hoc field handling.
+
+### Added
+- Diceware passphrase generator
+- CSV import schema detection added
+
+### Migration Notes
+- Existing vaults must be exported with plaintext and password history must be deleted from export before importing or in list[tuple] format [(pendulum datetime, password(str))]
+
+---
+
 ## [1.3.0] — 2025-12-19
 
 ### Added

@@ -62,6 +62,8 @@ def get_note_from_user(prompt: str = "Enter note:") -> str:
             consecutive_empty += 1
             if consecutive_empty >= 3 or (consecutive_empty == 1 and note == ""):
                 break
+            else:
+                note += "\n"
         else:
             consecutive_empty = 0
             note += line + "\n"

@@ -18,6 +18,7 @@ It was built as a personal tool to organize account information, improve passwor
 ### **Password Management**
 
 - Truly random password generator using Python’s `secrets` module (customizable)
+- Machine-generated Diceware passphrase generator with randomized capitalization, separators, and digit placement
 - Copy masked passwords to clipboard, auto clears after set time (configurable)
 - Password history (configurable)
 - Secure clipboard handling with auto-clear (configurable)

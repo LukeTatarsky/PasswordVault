@@ -2,17 +2,17 @@ import hashlib
 import urllib.request
 import csv
 import logging
-import time
 import pendulum
 from collections import defaultdict
 
 from zxcvbn import zxcvbn
-from .vault_utils import get_entry_data
+from utils.vault_utils import decrypt_entry
 from config.config_vault import DT_FORMAT_EXPORT, SEP_LG, SITE_LEN, ACCOUNT_LEN
+from utils.Entry import Entry
 
 logger = logging.getLogger(__name__)
 
-def pwned_password_count(password: str, timeout: int = 5) -> int:
+def pwned_password_count(entry: Entry, timeout: int = 5) -> int:
     """
     This code is derived from the pwnedpasswords Python package
     https://github.com/robertdavidgraham/pwnedpasswords
@@ -33,9 +33,10 @@ def pwned_password_count(password: str, timeout: int = 5) -> int:
         count = pwnedpasswords.check(sha1_hash)
 
     Returns  -  number of times password has been found in data breach database
+                -1 if any error occurs
     """
     # Hash password with SHA-1
-    sha1_hash = hashlib.sha1(password.encode("utf-8")).hexdigest().upper()
+    sha1_hash = hashlib.sha1(entry.password).hexdigest().upper()
 
     prefix = sha1_hash[:5]
     suffix = sha1_hash[5:]
@@ -67,7 +68,7 @@ def pwned_password_count(password: str, timeout: int = 5) -> int:
     return 0
 
 
-def strength_analysis(password: str,*,
+def strength_analysis(entry: Entry,*,
                       crack_threshold_days=0.5,
                       show_score=False, 
                       show_warning= False, 
@@ -93,19 +94,17 @@ def strength_analysis(password: str,*,
                 (int)
              - -1 if password is empty or None
     """
-    if not password:
+    if not entry.password:
         return -1
-    if len(password) >= 150:
-        cut_pw = password[:150]
-        del password
-        password = cut_pw
-        del cut_pw    
+    if len(entry.password) > 100:
+        results = zxcvbn(entry.password[:100].decode("utf-8"), max_length=100)
+    else:
+        results = zxcvbn(entry.password.decode("utf-8"), max_length=100)
 
-    results = zxcvbn(password, max_length=150)
     score = results['score']
 
     if show_score:
-        print(f"Analysis results for: {password}")
+        print(f"Analysis results for: {entry.password}")
         print(f"Score 0 (terrible) to 4 (great) : {results['score']}")
 
     if show_warning and results['feedback']['warning']:
@@ -129,7 +128,7 @@ def strength_analysis(password: str,*,
     return score
 
 
-def severity(entry):
+def severity(result_entry):
     """
     Return a sortable severity key for a vault entry.
 
@@ -143,7 +142,7 @@ def severity(entry):
     Returns:
         A tuple usable as a sort key.
     """
-    issues = entry["issues"]
+    issues = result_entry["issues"]
 
     # Top priority is password exposures
     exposures_val = issues.get("exposures") or 0
@@ -215,16 +214,10 @@ def audit_vault(encrypted_entries, key: bytes,
     default_reused = 0
 
     for eid in encrypted_entries:
-        data = get_entry_data(encrypted_entries, key, eid)
-
-        site = data.get("site", "")
-        account = data.get("account", "")
-        pw = data.get("password", "")
-
-        del data
+        entry = decrypt_entry(encrypted_entries[eid], key, eid)
 
         # Ignore entries with no password
-        if not pw:
+        if not entry.password:
             continue
 
         # Initialize result entry
@@ -232,8 +225,8 @@ def audit_vault(encrypted_entries, key: bytes,
         # NoneType in results/export means it was not tested.
         results[eid] = {
             "eid": eid,
-            "site": site,
-            "account": account,
+            "site": entry.site,
+            "account": entry.account,
             "issues": {
                 "strength": None,
                 "exposures": None,
@@ -242,25 +235,25 @@ def audit_vault(encrypted_entries, key: bytes,
         }
 
         if test_strength:
-            strength = strength_analysis(pw)
+            strength = strength_analysis(entry)
             if strength < strength_threshold:
                 results[eid]["issues"]["strength"] = strength
 
         if test_exposure:
-            count = pwned_password_count(pw)
+            count = pwned_password_count(entry)
             if count > 0:
                 results[eid]["issues"]["exposures"] = count
             elif count == -1:
-                del pw, site, account
-                time.sleep(1)
-                return []
+                # Most likely network error. skip the rest of exposure counts
+                test_exposure = False
 
         if test_reuse:
-            pw_hash = hashlib.sha256(pw.encode("utf-8")).hexdigest()
+            pw_hash = hashlib.sha256(entry.password).hexdigest()
             # Create password hashmap
             pw_groups[pw_hash].append(eid)
 
-        del pw, site, account
+        entry.wipe()
+        del entry
     
     # Mark reused passwords if a group is larger than one
     if test_reuse:
@@ -277,8 +270,8 @@ def audit_vault(encrypted_entries, key: bytes,
 
     # Finalize results
     # Sort results based on priority function
-    for eid, entry in sorted(results.items(), key=lambda x: severity(x[1])):
-        issues = entry.get('issues')
+    for eid, result_entry in sorted(results.items(), key=lambda x: severity(x[1])):
+        issues = result_entry.get('issues')
 
         strength = issues.get("strength")
         strength = strength if strength is not None else default_strength
@@ -306,11 +299,11 @@ def audit_vault(encrypted_entries, key: bytes,
 
         # Only keep problematic entries
         if weak_pw or exposed_pw or reused_pw:
-            site = entry.get('site')
+            site = result_entry.get('site')
             if len(site) >= SITE_LEN:
                 site = site[:SITE_LEN-4] + "..."
 
-            account = entry.get('account')
+            account = result_entry.get('account')
             if len(account) >= ACCOUNT_LEN:
                 account = account[:ACCOUNT_LEN-4] + "..."
 
@@ -329,12 +322,12 @@ def audit_vault(encrypted_entries, key: bytes,
             print(line)
 
             # mask accounts for export
-            account = entry.get("account", "")
+            account = result_entry.get("account", "")
             # masked_account = account[:5]+ "..." if len(account) > 5 else account
             masked_account = account
 
             final_results.append({
-                "site": entry.get("site", ""),
+                "site": result_entry.get("site", ""),
                 "account": masked_account,
                 "strength": issues.get("strength"),
                 "reused": issues.get("reused", None),
@@ -362,8 +355,65 @@ def audit_vault(encrypted_entries, key: bytes,
         
     return final_results
 
-if __name__ == "__main__":
+def audit_entry(entry: Entry,
+                encrypted_entries, 
+                key: bytes,
+                eid: str,
+                 test_strength=True,
+                   test_exposure=False,
+                   test_reuse=True,) -> dict:
+    """
+    Audits single entry password for security issues.
+
+    """
+
+    # Ignore entries with no password
+    if not entry.password:
+        return
     
-    password = 'sde3444ter3r4'
-    print (f"\n Password score (0-5) for {password}: {strength_analysis(password,show_crack_times=True)}")
-    print (f"\n number of entries found in database for {password}:  {pwned_password_count(password)}")
+    # Initialize result entry
+    # None used here for csv export purposes. 
+    # NoneType in results/export means it was not tested.
+    results = {
+        "site": entry.site,
+        "account": entry.account,
+        "issues": {
+            "strength": None,
+            "exposures": None,
+            "reused": None
+        }
+    }
+    
+    if test_strength:
+        strength = strength_analysis(entry, show_crack_times=True)
+        results["issues"]["strength"] = strength
+        print (f"\nStrength (0-5): {strength}")
+
+    if test_exposure:
+        count = pwned_password_count(entry)
+        results["issues"]["exposures"] = count
+        print (f"\nExposure count: {count}")
+
+    if test_reuse:
+        reuse_list = []
+        for eid2 in encrypted_entries:
+            entry2 = decrypt_entry(encrypted_entries[eid2], key, eid2)
+            if entry2.password == entry.password and eid != eid2:
+                reuse_list.append(f" Site: {entry2.site}   Account: {entry2.account}")
+            entry2.wipe()
+            del entry2
+        if len(reuse_list) > 0:
+            print ("\nReuse detected in the following accounts:")
+            for e in reuse_list:
+                print (e)
+        else:
+            print ("\nReuse count: 0")
+        results["issues"]["reused"] = len(reuse_list)
+
+    return results
+    
+
+# if __name__ == "__main__":
+#     password = 'sde3444ter3r4'
+#     print (f"\n Password score (0-5) for {password}: {strength_analysis(password,show_crack_times=True)}")
+#     print (f"\n number of entries found in database for {password}:  {pwned_password_count(password)}")

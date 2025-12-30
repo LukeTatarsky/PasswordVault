@@ -14,6 +14,7 @@ from cryptography.exceptions import InvalidTag
 from config.config_vault import *
 from .crypto_utils import *
 from .tpm_utils import create_tpm_key, tpm_decrypt, tpm_encrypt
+from .Entry import Entry, print_bytearray
 
 logger = logging.getLogger(__name__)
 
@@ -336,14 +337,15 @@ def list_entries(encrypted_entries: dict[str, str], key: bytes,
 
     for eid, blob in encrypted_entries.items():
         try:
-            data = json.loads(decrypt(blob, key, eid))
-            site = data.get("site", "")
-            account = data.get("account", "")
-            note = data.get("note", "")
-            del data
+            # data = json.loads(decrypt(blob, key, eid))
+            # site = data.get("site", "")
+            # account = data.get("account", "")
+            # note = data.get("note", "")
+            # del data
+            entry = decrypt_entry(blob, key, eid)
 
             # Build searchable text
-            searchable_str = " ".join([site, account, note]).lower()
+            searchable_str = " ".join([entry.site, entry.account, entry.note]).lower()
             
             # Filter if searching
             if query:
@@ -351,8 +353,10 @@ def list_entries(encrypted_entries: dict[str, str], key: bytes,
                 if not all(term in searchable_str for term in terms):
                     continue
     
-            display_data[eid] = (site, account)
-            del searchable_str, note, account, site
+            display_data[eid] = (entry.site, entry.account)
+            del searchable_str
+            entry.wipe()
+            del entry
 
         except Exception as e:
             # only show corrupted if not searching
@@ -367,7 +371,7 @@ def list_entries(encrypted_entries: dict[str, str], key: bytes,
     # Sort by site , then account
     sorted_entries = sorted(
         display_data.items(),
-        key=lambda entry: (entry[1][0].lower(), entry[1][1].lower())
+        key=lambda e: (e[1][0].lower(), e[1][1].lower())
     )
     del display_data
 
@@ -389,163 +393,75 @@ def list_entries(encrypted_entries: dict[str, str], key: bytes,
 
     return eid_list
 
-def get_entry_data(entries: dict[str, str], key: bytes, eid: str) -> dict[str, object]:
-    """
-    Retrieve and decrypt a single vault entry.
-
-    Looks up an encrypted entry by ID, decrypts its token,
-    parses the resulting JSON, and returns the decrypted data.
-
-    If the entry cannot be found, decrypted, or parsed, an empty
-    dictionary is returned and a user-facing message is printed.
-
-    Args:
-        entries: Mapping of entry IDs to encrypted tokens.
-        key: Master key used for decryption.
-        eid: Entry ID to retrieve.
-
-    Returns:
-        Decrypted entry data as a dictionary, or an empty dictionary
-        if the entry cannot be retrieved.
-
-    Side Effects:
-        Offers corrupted entry deletion when detected.
-    """
-    data: Dict[str, Any] = {}
-    try:
-        encrypted_token: str = entries[eid]
-        data = json.loads(decrypt(encrypted_token, key, eid))
-    except KeyError:
-        print("Not found.")
-    except (InvalidTag, json.JSONDecodeError, UnicodeDecodeError):
-        print("Entry may be corrupted, cannot view.")
-        delete_corrupted_entry(entries, key, eid)
-    except Exception as e:
-        print(f"Unexpected error: {e}")
-    return data
-
-
-def display_entry(source: Dict[str, Any], 
-    key: bytes | None = None,
-    eid: str | None = None,  *,
+def display_entry(entry: Entry, *,
     show_pass: bool = False, 
-    show_history: bool = False, 
-    show_all: bool = False) -> int: 
+    show_pw_hist: bool = False, 
+    show_all: bool = False) -> None: 
     """
-    Display a password vault entry in a human-readable format.
-
-    Supports two modes of operation:
-    1) Vault mode: decrypts and displays an entry from the encrypted vault.
-    2) In-memory mode: displays an already-decrypted entry dictionary.
+    Display a vault entry in a readable format.
 
     Output can optionally reveal passwords, password history, or
     additional sensitive fields.
 
     Args:
-        source: Either the encrypted vault entries dictionary or a
-            decrypted entry dictionary.
-        key: Master key used for decryption when operating in vault mode.
-        eid: Entry ID to retrieve when operating in vault mode.
+        entry: Decrypted entry
         show_pass: If True, reveal the plaintext password.
         show_history: If True, display password history.
         show_all: If True, display all available fields.
 
-    Returns:
-        0 if the entry is displayed successfully.
-        1 if the entry is missing, corrupted, or invalid.
-
     Side Effects:
         Prints formatted entry data to stdout.
-        Scrubs sensitive data from memory where possible.
     """
 
-    # ==============================================================
-    # 1. Decide on input type
-    # ==============================================================
-    if eid is not None and key is not None:
-        # Mode 1: Display from encrypted vault
-        data = get_entry_data(source, key, eid)
-        if not data:
-            return 1
-    else:
-        # Mode 2: Display already-decrypted in-memory dict
-        data = source
-        source = secrets.token_bytes(len(source))
-        del source
-        if not data:
-            return 1
-
     print(f"\n{SEP_LG}")
-    print(f"Site         : {data.get('site', '(missing)')}")
+    print(f"Site         : {entry.site}")
 
     # === Account ==========================================================
-    account = data.get('account') or ''
-    if account:
-        print(f"Account      : {account}")
-    account = secrets.token_bytes(len(account))
-    del account
+    if entry.account:
+        print(f"Account      : {entry.account}")
 
     # === Password (masked or revealed) ====================================
-    password = data.get('password', '') or ''
     if show_pass or show_all:
-        print(f"Password     : {password}")
-    elif password:
-        masked = '*' * PASS_DEFAULTS["length"]
-        print(f"Password     : {masked}")
-    password = None
-    del password
+        print(f"Password     : ", end="", flush= True)
+        print_bytearray(entry.password)
+    elif entry.password:
+        print(f"Password     : {'*' * PASS_DEFAULTS["length"]}")
 
     # === Password History (only if requested and exists) ==================
-    if show_history or show_all: 
-        history = data.get('password_history', [])
-        if history:
+    if show_pw_hist or show_all: 
+        if entry.pw_hist:
             print(f"Pass History : ")
             print(f" - Last Used :")
-            for pw_entry in history:
-                print(f" - {pendulum.parse(pw_entry.get('last_used','unknown date'))
+            for pw_entry in entry.pw_hist:
+                print(f" - {pendulum.parse(pw_entry[0])
                             .in_timezone('local').format(DT_FORMAT_PASS_HISTORY)} :",
-                    f" {pw_entry.get('password','')}")
+                    f" {pw_entry[1]}")
                 del pw_entry
-            del history
             print(SEP_SM)
 
     # === Note =============================================================
-    note = data.get('note', '').strip()
-    if note:
-        print("Note")
-        print(f"{SEP_SM}\n{note}\n{SEP_SM}")
-        del note
+    if entry.note:
+        print("Note:")
+        print(f"{SEP_SM}\n{entry.note}\n{SEP_SM}")
 
     # === Recovery Keys =====================================================
     if show_all:
-        keys = data.get('keys', '')
-        if show_all and keys:
-            print("Keys")
-            print(f"{SEP_SM}\n{keys}\n{SEP_SM}")
-        elif keys:
+        if show_all and entry.rec_keys:
+            print("Keys:")
+            print(f"{SEP_SM}")
+            print_bytearray(entry.rec_keys)
+            print(f"{SEP_SM}")
+        elif entry.rec_keys:
                 print(f"Keys         : {"*" * 10}")
-        keys = None
-        del keys
 
     # === TOTP Key ==========================================================
     if show_all:
-        totp = data.get('totp', '')
-        if totp:
+        if entry.totp:
             print(f"TOTP         : **protected**")
-        elif totp:
-            print(f"TOTP         : {"*" * 10}")
-        totp = None
-        del totp
 
     # === Timestamps =======================================================
-    try:
-        created = pendulum.parse(data.get('created_date', '1970-01-01T00:00:00Z'))
-        edited = pendulum.parse(data.get('edited_date', '1970-01-01T00:00:00Z'))
-    except Exception:
-        created = edited = pendulum.now()
-
-    print(f"Created      : {created.in_timezone('local').format(DT_FORMAT)}")
-    print(f"Last Edited  : {edited.in_timezone('local').format(DT_FORMAT)}")
+    print(f"Created      : {pendulum.parse(entry.created).in_timezone('local').format(DT_FORMAT)}")
+    print(f"Last Edited  : {pendulum.parse(entry.edited).in_timezone('local').format(DT_FORMAT)}")
     print(SEP_LG)
     return 0
 

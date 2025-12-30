@@ -1,17 +1,144 @@
 import string
 import secrets
 import getpass
-from config.config_vault import *
-from .user_input import *
-from .password_utils import *
+from config.config_vault import PASS_DEFAULTS, UTF8, WORD_LIST
+from .user_input import get_int
+from utils.Entry import print_bytearray
+
+LOWER = string.ascii_lowercase.encode("ascii")
+UPPER = string.ascii_uppercase.encode("ascii")
+NUMS  = string.digits.encode("ascii")
+SYMBS = PASS_DEFAULTS["symbols_pool"].encode("ascii")
+SAFE_SYMBS = PASS_DEFAULTS["safe_symbols"].encode("ascii")
+
+# Used to filter out unwanted chars
+AMBIG = set(PASS_DEFAULTS["ambiguous_chars"].encode("ascii"))
+UNSAFE_SYMBS = set(b for b in SYMBS if b not in SAFE_SYMBS)
+
+DEFAULT_MIN_FALLBACK = 3
 
 
-def random_password(length: int = PASS_DEFAULTS["length"],
+class DicewarePassphrase:
+    """
+    Diceware wordlist loader and generator.
+    """
+    def __init__(self, path: str):
+        """Load a Diceware wordlist.
+
+        Args:
+            path: Path to wordlist file.
+        """
+        self._words = self._load(path)
+
+    def _load(self, path: str) -> dict[str, str]:
+        """
+        Load Diceware keys and words.
+
+        Args:
+            path: Wordlist file path.
+
+        Returns:
+            Mapping of dice keys to words.
+
+        Raises:
+            ValueError: If a key is invalid.
+        """
+        words = {}
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                key, word = line.strip().split(maxsplit=1)
+                if len(key) != 5 or not set(key) <= set("123456"):
+                    raise ValueError(f"Invalid Diceware key: {key}")
+                words[key] = word
+        return words
+
+    def get_word(self, key: str) -> bytearray:
+        """Return a word for a dice key.
+
+        Args:
+            key: Five-digit Diceware key.
+
+        Returns:
+            Capitalized word as bytes.
+        """
+        return bytearray(self._words[key].capitalize().encode(UTF8))
+
+    def clear(self):
+        """Clear loaded wordlist."""
+        self._words.clear()
+
+    def roll_5dice(self) -> str:
+        """Roll five dice securely.
+
+        Returns:
+            Five-digit dice string.
+        """
+        return ''.join(str(randbelow_reject(6) + 1) for _ in range(5))
+
+
+def filter_out_bytes(pool: bytes, exclude: set[int]) -> bytes:
+    """
+    Remove excluded bytes from a pool.
+
+    Args:
+        pool: Candidate bytes.
+        exclude: Byte values to remove.
+
+    Returns:
+        Filtered bytes.
+    """
+    return bytes(b for b in pool if b not in exclude)
+
+def randbelow_reject(n: int) -> int:
+    """
+    Returns a uniform random integer in [0, n) using rejection sampling.
+    Removes modulo bias.
+
+    Args:
+        n: Upper bound (exclusive).
+
+    Returns:
+        Random integer.
+
+    Raises:
+        ValueError: If n <= 0.
+    """
+    if n <= 0:
+        raise ValueError("n must be > 0")
+    
+    # Number of bits k needed to represent int n
+    k = n.bit_length()
+
+    # Bit mask. Bitwise leftshift
+    mask = (1 << k) - 1
+
+    while True:
+        r = secrets.randbits(k) & mask
+        # Only accept values below n
+        if r < n:
+            return r
+
+def secure_shuffle(buf: bytearray) -> None:
+    """
+    Perform in place Fisher-Yates shuffle on the array.
+    Same as secrets.shuffle but without modulo bias.
+
+    Args:
+        buf: Buffer to shuffle.
+    """
+    n = len(buf)
+    for i in range(n - 1, 0, -1):
+        j = randbelow_reject(i + 1)
+        buf[i], buf[j] = buf[j], buf[i]
+
+def random_password(
+    length: int = PASS_DEFAULTS["length"],
     min_upper: int = PASS_DEFAULTS["min_upper"],
     min_lower: int = PASS_DEFAULTS["min_lower"],
     min_nums: int = PASS_DEFAULTS["min_digits"],
-    min_syms: int = PASS_DEFAULTS["min_symbols"], 
-    avoid_ambig = PASS_DEFAULTS["avoid_ambiguous"]) -> str:
+    min_symbs: int = PASS_DEFAULTS["min_symbols"], 
+    avoid_ambig: bool = PASS_DEFAULTS["avoid_ambiguous"],
+    use_safe_symbs: bool = PASS_DEFAULTS["use_safe_symbs"]) -> bytearray:
     """
     Generate a strong, cryptographically secure random password.
 
@@ -27,74 +154,83 @@ def random_password(length: int = PASS_DEFAULTS["length"],
         min_syms: Minimum number of symbols.
         avoid_ambig: If True, excludes visually ambiguous characters
             (e.g., l, I, 1, O, 0).
+        use_safe_symbs: If True, only uses a set of bank safe symbols.
 
     Returns:
-        A randomly generated password meeting all complexity requirements.
-
-    Raises:
-        ValueError: If the requested length is insufficient to satisfy
-            the minimum character requirements.
+        A randomly generated password (bytearray)
 
     Security Notes:
         - Uses cryptographically secure randomness.
-        - Enforces character-class minimums.
-        - Optionally excludes ambiguous characters.
         - Limits excessive consecutive identical characters.
     """
-    if length < (min_upper + min_lower + min_nums + min_syms):
+    if length < (min_upper + min_lower + min_nums + min_symbs):
         raise ValueError(
         f"Password length {length} is too short!\n"
-        f"  Need at least {min_upper + min_lower + min_nums + min_syms} characters "
-        f"for your requirements:\n"
+        f"  Need at least {min_upper + min_lower + min_nums + min_symbs} characters "
+        f"for requirements:\n"
         f"  • {min_upper} uppercase\n"
         f"  • {min_lower} lowercase\n"
         f"  • {min_nums} numbers\n"
-        f"  • {min_syms} symbols"
+        f"  • {min_symbs} symbols"
     )
-
     # Define character pools
-    lower = string.ascii_lowercase
-    upper = string.ascii_uppercase
-    nums  = string.digits
-    syms  = PASS_DEFAULTS["symbols_pool"]
+    lower = LOWER
+    upper = UPPER
+    nums  = NUMS
+    symbs  = SYMBS
 
-    # Remove ambiguous chars
+    # Filter out ambiguity and unsafe symbols 
     if avoid_ambig:
-        exclude = PASS_DEFAULTS["ambiguous_chars"]
-        lower = ''.join(c for c in lower if c not in exclude)
-        upper = ''.join(c for c in upper if c not in exclude)
-        nums  = ''.join(c for c in nums  if c not in exclude)
+        lower = filter_out_bytes(lower, AMBIG)
+        upper = filter_out_bytes(upper, AMBIG)
+        nums  = filter_out_bytes(nums,  AMBIG)
+    if use_safe_symbs:
+        symbs = filter_out_bytes(symbs, UNSAFE_SYMBS)
+    
+    # Create a list of all possible chars for filling the remainder
+    all_chars = bytearray(lower + upper + nums + symbs)
+    secure_shuffle(all_chars)
+    all_chars = bytes(all_chars)
+    alnum = lower + upper + nums
+    
+    password = bytearray()
 
-    all_chars = lower + upper + nums + syms
-
-    # Step 1: Guarantee minimums
-    password = []
+    # Guarantee minimums
     password.extend(secrets.choice(upper) for _ in range(min_upper))
     password.extend(secrets.choice(lower) for _ in range(min_lower))
     password.extend(secrets.choice(nums)  for _ in range(min_nums))
-    password.extend(secrets.choice(syms)  for _ in range(min_syms))
+    password.extend(secrets.choice(symbs)  for _ in range(min_symbs))
 
-    # Step 2: Fill the rest randomly
+    # Fill remaining
     remaining = length - len(password)
     password.extend(secrets.choice(all_chars) for _ in range(remaining))
 
-    # Step 3: Shuffle all the characters 
-    secrets.SystemRandom().shuffle(password)
-    pw = ''.join(password)
+    # Shuffle
+    for i in range(5):
+        secure_shuffle(password)
 
-    # Step 4: Ensure no excessive consecutive identical chars, reshuffle if needed
-    max_shuffles = 1000
-    shuffle_count = 0
-    while max_consecutive_chars(pw) > PASS_DEFAULTS["max_consecutive"]:
-        secrets.SystemRandom().shuffle(password)
-        pw = ''.join(password)
-        shuffle_count += 1
-        if shuffle_count >= max_shuffles:
+    # Enforce max consecutive rule
+    max_consecutive = PASS_DEFAULTS["max_consecutive"]
+    max_shuffles = 10000
+
+    for i in range(1, max_shuffles):
+        # Ensure start and end are not symbols
+        password[0] = secrets.choice(alnum)
+        password[-1] = secrets.choice(alnum)
+
+        if check_max_consecutive_bytes(password, max_consecutive):
             break
+        secure_shuffle(password)
 
-    return pw
+        # Increment max consecutive every x shuffles. 
+        # Prevents infinite loop while keeping the max consecutive count low.
+        # Only useful for extremely long passwords.
+        if i % 1000 == 0:
+            max_consecutive += 1
 
-def ask_password(prompt: str = "Password:") -> str | None:
+    return password
+
+def ask_password(prompt: str = "Password:") -> bytearray | None:
     """
     Prompt the user to enter or generate a password.
 
@@ -106,7 +242,7 @@ def ask_password(prompt: str = "Password:") -> str | None:
         prompt: Prompt displayed to the user.
 
     Returns:
-        The accepted password string, or None if the user chooses to quit.
+        The accepted password bytearray, or None if the user chooses to quit.
 
     Side Effects:
         Prompts for user input.
@@ -114,90 +250,146 @@ def ask_password(prompt: str = "Password:") -> str | None:
     """
     while True:
         print(f"\n{prompt}:")
-        print(f"  • Type 'g' → generate strong {PASS_DEFAULTS["length"]}-char password")
-        print("  • Type 'c' → generate customizable random password")
-        print("  • Type 'q' → quit")
-        print("  • Press Enter to type your own")
+        print(f"  • '1' → generate random password (i.e X[hX)CqYk878pkf$l)")
+        print("  • '2' → generate random passphrase (i.e. correct-horse-battery-staple)")
+        print("\n  • Press 'Enter' → type your own")
+        print("  • Type '7' → quit")
+        
         choice = input(" → ").strip().lower()
 
         if choice == "":
             pw = getpass.getpass(
                 f"Enter password (min length = {PASS_DEFAULTS['min_length']}): "
                 ).strip()
-            if len(pw) < PASS_DEFAULTS["min_length"]:
-                print(f"  Password too short (minimum {PASS_DEFAULTS['min_length']} characters)")
-                continue
-            return pw
+            return bytearray(pw.encode(UTF8))
 
-        elif choice == "g":
-            pw = random_password()
-            print(f" Generated: {pw}")
-            if input("\n Accept this password? (y/n): ").strip().lower() != "y":
-                continue
-            return pw
-
-        elif choice == "c":
+        elif choice == "1":
             pw_len = get_int(
-                f"\n  Enter desired length (minimum {PASS_DEFAULTS['min_length']}, "
-                f"Enter for default of {PASS_DEFAULTS['length']}): ", 
+                f"\n  Enter desired length (minimum {PASS_DEFAULTS["min_length"]}, "
+                f"Enter for default of {PASS_DEFAULTS["length"]}): ", 
                 default=PASS_DEFAULTS["length"]
                 )
             if pw_len is None:
                 break
-            if pw_len < PASS_DEFAULTS['min_length']:
-                print(f"  Length too short, using {PASS_DEFAULTS['length']}.")
-                pw_len = PASS_DEFAULTS['length']
+            # Check length
+            if pw_len < PASS_DEFAULTS["min_length"]:
+                print(f"  Error: Too short. Minumum allowed length is {PASS_DEFAULTS["max_length"]}")
+                continue
 
-            min_upper = get_int("  Minimum upper case (Enter for default): ", 
-                                default=PASS_DEFAULTS["min_upper"])
-            if min_upper is None:
-                break
-            min_nums = get_int("  Minimum numbers (Enter for default): ", 
-                               default=PASS_DEFAULTS["min_digits"])
-            if min_nums is None:
-                break
-            min_syms = get_int("  Minimum symbols (Enter for default): ", 
-                               default=PASS_DEFAULTS["min_symbols"])
-            if min_syms is None:
-                break
+            if pw_len > PASS_DEFAULTS["max_length"]:
+                print(f"  Error: Too long. Maximum allowed length is {PASS_DEFAULTS["max_length"]}")
+                continue
+
+            min_upper = PASS_DEFAULTS["min_upper"] or DEFAULT_MIN_FALLBACK
+            min_nums = PASS_DEFAULTS["min_digits"] or DEFAULT_MIN_FALLBACK
+            min_symbs = PASS_DEFAULTS["min_symbols"] or DEFAULT_MIN_FALLBACK
+
             try:
                 pw = random_password(length = pw_len,
                                       min_upper = min_upper,
                                         min_nums = min_nums,
-                                          min_syms = min_syms)
+                                          min_symbs = min_symbs)
             except ValueError as e:
                 print (f"\n  {e}")
                 continue
 
-            print(f"\n Generated: {pw}")
-            if input("\n Accept this password? (y/n): ").strip().lower() != "y":
+            print(f" Generated: ", end="")
+            print_bytearray(pw)
+            if input("\n Accept this password? (y/n): ").strip().lower() == "n":
                 continue
             return pw
-        elif choice == "q":
+        
+        elif choice == "2":
+            diceware = DicewarePassphrase(WORD_LIST)
+            pw_len = get_int(
+                f"\n  Enter desired number of words. "
+                f"Press Enter for default of {PASS_DEFAULTS["phrase_len"]}: ", 
+                default=int(PASS_DEFAULTS["phrase_len"])
+                )
+            if pw_len is None:
+                break
+
+            use_nums = input(f"  Include numbers? (y/n) or Enter for default: ")
+            if use_nums == "y":
+                use_nums = True
+            elif use_nums == "n":
+                use_nums = False
+            else:
+                use_nums = PASS_DEFAULTS["phrase_use_nums"]
+
+            pw = bytearray()
+            for i in range(pw_len):
+                word = diceware.get_word(diceware.roll_5dice())
+                word = apply_random_capitalization(word.decode(UTF8))
+                if use_nums:
+                    word = apply_random_number(word)
+
+                pw.extend(bytearray(word, UTF8))
+                if i < pw_len-1:
+                    pw.extend(PASS_DEFAULTS["phrase_sep"][randbelow_reject(
+                        len(PASS_DEFAULTS["phrase_sep"]))].encode(UTF8))
+                del word
+                
+            print(f"\n Generated: ", end="")
+            print_bytearray(pw)
+            if input("\n Accept this password? (y/n): ").strip().lower() == "n":
+                continue
+            return pw
+        
+        elif choice == "7":
             return None
         else:
             print("Invalid — press Enter, 'g', or 'c'")
 
-
-def max_consecutive_chars(pw: str) -> int:
-    """
-    Determine the longest run of identical consecutive characters.
+def check_max_consecutive_bytes(pw: bytearray, threshold: int) -> bool:
+    '''
+    Check if longest run of identical consecutive characters is above threshold.
 
     Args:
-        pw: Password string to analyze.
-
-    Returns:
-        Length of the longest sequence of identical consecutive characters.
-    """
-    max_run = 1
-    current_run = 1
+        pw: Password to analyze. (bytearray)
+        threshold: The minimum nuymber of consecuritves bytes to allow (int)
     
-    for a, b in zip(pw, pw[1:]):
-        if a == b:
+    Returns:
+        True: if > threshold
+        False: if <= threshold
+    '''
+    if not pw:
+        return True
+
+    current_run = 1
+    prev = pw[0]
+
+    for b in pw[1:]:
+        if b == prev:
             current_run += 1
-            if current_run > max_run:
-                max_run = current_run
+            if current_run > threshold:
+                return False
         else:
             current_run = 1
+            prev = b
+
+    return True
+
+def apply_random_capitalization(word: str) -> str:
+    r = randbelow_reject(3)
+    if r == 0:
+        return word.lower()
+    elif r == 1:
+        return word.capitalize()
+    else:
+        return word.upper()
     
-    return max_run
+def apply_random_number(word: str) -> str:
+    r = randbelow_reject(4)
+    if r == 0:
+        return word
+    elif r == 1:
+        return word \
+                + str(randbelow_reject(50) + randbelow_reject(50))
+    elif r == 2:
+        return  str(randbelow_reject(50) + randbelow_reject(50))\
+                + word
+    elif r == 3:
+        return  str(randbelow_reject(50) + randbelow_reject(50)) \
+                + word \
+                + str(randbelow_reject(50) + randbelow_reject(50))

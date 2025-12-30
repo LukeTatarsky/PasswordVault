@@ -3,9 +3,10 @@ import qrcode
 import tkinter as tk
 import base64
 import io
-import secrets
 import pyotp
 import time
+from utils.Entry import Entry
+from config.config_vault import UTF8
 
 def generate_otp_uri(
     secret,
@@ -14,8 +15,27 @@ def generate_otp_uri(
     type_="totp",
     algorithm="SHA1",
     digits=6,
-    period=30,
-):
+    period=30,):
+    """
+    Generate a standard otpauth URI for TOTP/HOTP.
+
+    Constructs a URI compatible with authenticator apps like Google Authenticator.
+
+    Args:
+        secret: Base32-encoded secret key.
+        label: Label identifying the account.
+        issuer: Optional issuer name.
+        type_: "totp" (default) or "hotp".
+        algorithm: Hash algorithm (default "SHA1").
+        digits: Number of code digits (default 6).
+        period: Time period in seconds for code refresh (default 30).
+
+    Returns:
+        A string containing the otpauth URI.
+
+    Raises:
+        ValueError: If secret or label are empty.
+    """
     if not secret or not label:
         raise ValueError("secret and label are required")
 
@@ -31,28 +51,26 @@ def generate_otp_uri(
 
     return uri
 
-def show_totp_code(totp_key, interval=30) -> None:
+def show_totp_code(entry: Entry, interval=30) -> int:
     """
-    -------------------------------------------------------
-    Prompts the user to provide a password with options:
-      • Type 'g'    → generate a random password using defaults
-      • Type 'c'    → generate a customizable random password
-      • Type 'q' → quit
-      • Press Enter → manually type a custom password
-      
-    Use:
-        show_totp_code(totp_key)
-    -------------------------------------------------------
-    Parameters:
-        prompt - A promt to the user (str)
-                 Defaults to "Password:"
+    Display a live TOTP code for a vault entry.
+
+    Continuously prints the current one-time password, refreshing
+    according to the given interval.
+
+    Args:
+        entry: Entry containing the TOTP secret.
+        interval: Code refresh interval in seconds (default 30).
+
     Returns:
-        None
-    -------------------------------------------------------
+        0 if user exits via Ctrl+C.
+        1 if an unexpected error occurs.
+
+    Side Effects:
+        Prints TOTP codes to stdout every second.
     """
-    
     try:
-        totp = pyotp.TOTP(totp_key)
+        totp = pyotp.TOTP(entry.totp.decode(UTF8))
         print("Generator started. Ctrl + C to stop.\n")
         current_code = totp.now()
         while (True):
@@ -68,16 +86,34 @@ def show_totp_code(totp_key, interval=30) -> None:
 
     except KeyboardInterrupt:
         print("\n Stopped.")
+        return 0
     except Exception as e:
         print(f"Error: {e}")
-    finally:
-        totp_key = secrets.token_bytes(len(totp_key))
-        del totp_key
+        return 1
 
-    return
+def show_totp_qr(entry: Entry):
+    """
+    Display a TOTP QR code in a Tkinter window.
 
-def show_totp_qr(totp_secret, label, issuer):
-    uri = generate_otp_uri(secret=totp_secret, label=label.capitalize(),issuer=issuer.capitalize())
+    Generates a QR code for the TOTP URI of the entry, along with
+    a label displaying site and account. The window auto-closes
+    after a short period.
+
+    Args:
+        entry: Vault entry containing TOTP secret, site, and account.
+
+    Side Effects:
+        - Opens a GUI window with QR code and label.
+        - Generates temporary in-memory image data.
+        - Automatically closes the window after 15 seconds.
+
+    Security Notes:
+        - QR code contains the raw TOTP secret; treat as sensitive.
+        - References to image data are cleared after closing.
+    """
+    uri = generate_otp_uri(secret=entry.totp.decode(UTF8), 
+                           label=entry.account.capitalize(), 
+                           issuer=entry.site.capitalize())
     # Generate QR
     qr = qrcode.QRCode(box_size=10, border=4)
     qr.add_data(uri)
@@ -99,21 +135,37 @@ def show_totp_qr(totp_secret, label, issuer):
     lbl_img.image = photo
     lbl_img.pack(padx=20, pady=20)
 
-    # uri_box = tk.Text(root, height=4, width=90)
-    # uri_box.insert("1.0", f"{issuer}\n{label}\n{totp_secret}")
-    # uri_box.configure(state="disabled")
-    # uri_box.pack(padx=10, pady=(0, 10))
+    uri_box = tk.Text(root, height=4, width=90)
+    uri_box.insert("1.0", f"{entry.site.capitalize()}\n{entry.account.capitalize()}")
+    uri_box.configure(state="disabled")
+    uri_box.pack(padx=10, pady=(0, 10))
+
+    # Bring to front
+    root.lift()
+    root.attributes("-topmost", True)
+    root.after(100, lambda: root.attributes("-topmost", False))
+    root.focus_force()
+
+    def on_close():
+        nonlocal photo, lbl_img, uri_box, png_bytes, b64_data
+
+        lbl_img.destroy()
+        uri_box.destroy()
+
+        # Drop references
+        photo = None
+        lbl_img = None
+        uri_box = None
+        png_bytes = None
+        b64_data = None
+
+        root.destroy()
+
+    # Set auto close timer
+    seconds = 15
+    root.after(seconds * 1000, on_close)
+    # Remove references on window
+    root.protocol("WM_DELETE_WINDOW", on_close)
 
     root.mainloop()
-
-
-
-if __name__ == "__main__":
-
-    totp_secret = "VRADA63O2D44Z6Z25TFJQEHMBSJ5GWXA"
-    label = "test Label"
-    issuer = "test Service"
-
-    show_totp_qr(totp_secret, label, issuer)
-
     

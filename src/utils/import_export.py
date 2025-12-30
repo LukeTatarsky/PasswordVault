@@ -1,16 +1,78 @@
 import secrets
 import getpass
 import csv
+import json
+import os
 import logging
+import base64
+import pendulum
+
+from typing import Dict
+from cryptography.exceptions import InvalidTag
 
 from config.config_vault import *
-from .crypto_utils import *
-from .vault_utils import *
+from utils.Entry import Entry, bytes_to_str, str_to_bytes
+from utils.crypto_utils import encrypt_entry, encrypt, decrypt_entry, decrypt, derive_key
+from utils.vault_utils import load_vault, save_vault
+from utils.user_input import get_int
+
 
 logger = logging.getLogger(__name__)
-"""
-Under development
-"""
+
+# Mapping different field names to the field names used by PasswordVault
+# Potential issue when two mappings are the same but one has an extra matched field.
+# Proton export can potentially be detected as and edge export.
+# Ask user to validate schema
+SCHEMAS = {
+        "bitwarden" : {"name": "site",
+                    "login_username": "account",
+                    "login_password": "password",
+                    "notes": "note",
+                    "login_totp": "totp"
+                    },
+        "proton" : {"name" : "site",
+                    "username": "account",
+                    "password": "password",
+                    "note": "note"
+                    },
+        "chrome" : {"name": "site",
+                    "username": "account",
+                    "password": "password",
+                    "note": "note",
+                    },
+        "firefox" : {"url": "site",
+                    "username": "account",
+                    "password": "password",
+                    },
+        "opera" : {"name" : "site",
+                    "username": "account",
+                    "password": "password",
+                    "note": "note"
+                    },
+        "edge" : {"name" : "site",
+                    "username": "account",
+                    "password": "password",
+                    "note": "note"
+                    },
+        "password_vault" : {"site" : "site",
+                    "account": "account",
+                    "password": "password",
+                    "note": "note",
+                    "totp": "totp",
+                    "rec_keys": "rec_keys",
+                    },
+    }
+
+# These come as integers, convert them for dates before storing.
+FIREFOX_TIME_FIELDS = {
+    "timecreated",
+    "timelastused",
+    "timepasswordchanged",
+}
+PROTON_TIME_FIELDS = {
+    "createtime",
+    "modifytime",
+}
 
 def export_portable():
     """
@@ -67,10 +129,11 @@ def export_portable():
         for eid, old_blob in temp_entries.items():
             try:
                 # Decrypt with old key
-                plaintext = decrypt(old_blob, temp_key, eid)
+                entry = decrypt_entry(old_blob, temp_key, eid)
                 # Encrypt again with new key
-                new_blob = encrypt(plaintext, new_key, eid)
-                del plaintext
+                new_blob = encrypt_entry(entry, new_key, eid)
+                entry.wipe()
+                del entry
                 new_encrypted_entries[eid] = new_blob
             except InvalidTag as e:
                 msg = f"Failed to decrypt entry {eid}: {e}"
@@ -97,7 +160,7 @@ def export_portable():
 
         # Save to file
         timestamp = pendulum.now().format(DT_FORMAT_EXPORT)
-        file_name = f"password_vault_portable_{timestamp}.json"
+        file_name = f"password_vault_portable_{timestamp}.vault"
 
 
         with open(EXPORT_DIR / file_name, "w") as f:
@@ -156,10 +219,11 @@ def export_json():
         # Decrypt each entry first
         for eid, blob in encrypted_entries.items():
             try:
-                decrypted_json = decrypt(blob, key, eid)
-                data = json.loads(decrypted_json)
+                entry = decrypt_entry(blob, key, eid)
                 # store tuple (eid, data) for sorting later
-                decrypted_items.append((eid, data))
+                decrypted_items.append((eid, entry.to_dict_export()))
+                entry.wipe()
+                del entry
 
             except Exception as e:
                 print(f"Failed to decrypt entry {eid}: {e}")
@@ -175,6 +239,7 @@ def export_json():
         # Build final vault structure
         vault = {
             "date_exported": pendulum.now().in_timezone('local').format(DT_FORMAT),
+            "vault_version": VERSION,
             "entries": {}
         }
 
@@ -212,12 +277,14 @@ def export_json():
         else:
             print (" Vault exported successfully.")
 
-    except Exception as e:
-        print(f"Failed to export vault: {e}")
-        return False
+        decrypted_items.clear()
+        del decrypted_items
 
-    finally:
-        decrypted_items = []
+    except Exception as e:
+        msg = f"Failed to export vault: {e}"
+        print(msg)
+        logging.error(f"{pendulum.now().to_iso8601_string()} Error occured while exporting {msg}")
+        return False
 
     return True
 
@@ -256,10 +323,10 @@ def import_json(filepath, encrypted_entries, key):
         imported_count = 0
 
         # Loop plaintext entries
-        for _, entry_obj in vault.get("entries", {}).items():
+        for _, entry_obj in vault.get("entries", {}).items(): #TODO check for duplicates, use dates + manual verificaiton to decide which to keep.
 
             # Convert entry dict -> JSON plaintext string
-            plaintext_json = json.dumps(entry_obj)
+            entry = Entry.from_dict_export(entry_obj)
 
             # Generate a new unique ID
             eid = bytes_to_str(secrets.token_bytes(EID_LEN))
@@ -267,8 +334,10 @@ def import_json(filepath, encrypted_entries, key):
                 eid = bytes_to_str(secrets.token_bytes(EID_LEN))
             
             # Encrypt with *current* master key
-            encrypted_blob = encrypt(plaintext_json, key, eid)
-
+            encrypted_blob = encrypt_entry(entry, key, eid)
+            entry.wipe()
+            del entry
+            
             # Append into current vault
             encrypted_entries[eid] = encrypted_blob
             imported_count += 1
@@ -278,7 +347,10 @@ def import_json(filepath, encrypted_entries, key):
         print(f"Imported {imported_count} entries from JSON.")
         
     except Exception as e:
-        print(f"Failed to import exported JSON: {e}")
+        msg = f"Failed to export vault: {e}"
+        print(msg)
+        logging.error(f"{pendulum.now().to_iso8601_string()} Error occured while exporting {msg}")
+        sys.exit(1)
         return False
 
     return True
@@ -338,7 +410,7 @@ def import_portable(filepath, encrypted_entries, key):
         # load entries
         for old_eid, blob in vault.get("entries", {}).items():
             try:
-                entry_data = decrypt(blob, vault_key, old_eid)
+                entry = decrypt_entry(blob, vault_key, old_eid)
 
                 # Generate a new unique ID
                 new_eid = secrets.token_bytes(EID_LEN)
@@ -349,8 +421,9 @@ def import_portable(filepath, encrypted_entries, key):
                 new_eid = bytes_to_str(new_eid)
                 
                 # Encrypt with *current* master key
-                encrypted_blob = encrypt(entry_data, key, new_eid)
-                del entry_data
+                encrypted_blob = encrypt_entry(entry, key, new_eid)
+                entry.wipe()
+                del entry
 
                 # Append into current vault
                 encrypted_entries[new_eid] = encrypted_blob
@@ -387,14 +460,10 @@ def import_csv(filepath, encrypted_entries, key):
     Returns:
         True if the import completed successfully.
 
-    Side Effects:
-        - Reads plaintext credentials from disk.
-        - Encrypts and appends entries to the vault.
-        - Writes updated vault data to disk via `save_vault()`.
-
     Notes:
         - Field mappings are currently hardcoded for known exporters.
         - All imported entries receive new timestamps and IDs.
+        - Any additional data not in mapping is saved in entry.other
     """
     try:
         with open(IMPORT_DIR / filepath, "r", encoding=UTF8) as f:
@@ -409,56 +478,86 @@ def import_csv(filepath, encrypted_entries, key):
         csv_reader = csv.DictReader(f, delimiter=delimiter)
         imported_count = 0
 
-        # Map other export field names to field names used by PasswordVault_CLI.
-        # Case sensitive
-        bitwarden_map = {"name": "site",
-                   "login_username": "account",
-                   "login_password": "password",
-                   "notes": "note",
-                   "login_totp": "totp"
-                   }
-        chrome_map = {"name": "site",
-                   "username": "account",
-                   "password": "password",
-                    "note": "note",
-                   }
-        firefox_map = {"url": "site",
-                   "username": "account",
-                   "password": "password",
-                   }
-        mapping = chrome_map
+        vault_attributes = vars(Entry("temp"))
+        clean_fields = [f.strip() for f in csv_reader.fieldnames]
+
+        # Try to match schema to one of the presets.
+        schema_name = detect_schema(set(clean_fields))
+
+        # Ask user to confirm
+        ask = input(f"\n Detected [{schema_name.capitalize()}] file. Is this correct? (y/n): ").strip()
+
+        # If its not correct, select the correct one manually.
+        if ask == 'n':
+            print("\nSelect schema from list")
+            schema_list = list(SCHEMAS.keys())
+            for i in range(len(schema_list)):
+                print(f" {i} - {schema_list[i]}")
+            c = get_int(": ")
+            if c is None:
+                return
+            schema_name = schema_list[c]
         
+        schema = SCHEMAS.get(schema_name, {})
+
         for row in csv_reader:
-            entry_obj = {}
+            entry = Entry("temp_import_site")
+            
+            clean_row = {f.strip().lower(): clean_val(v) for f, v in row.items()}
 
-            for field in csv_reader.fieldnames:
-                field = field
-                value = row.get(field, "")
-                if value:
-                        # If we have a mapping, use that 
-                    if field in mapping:
-                        entry_obj[mapping[field]] = value
+            for csv_field, value in clean_row.items():
+                # values can be none
+                if not value:
+                    continue
+
+                value = normalize_newlines(clean_row.get(csv_field, ""))
+
+                # Entry has this field
+                if csv_field in vault_attributes:
+                    # convert to byte array if required
+                    if isinstance(vault_attributes.get(csv_field),bytearray):
+                        setattr(entry, csv_field, bytearray(value, UTF8))
                     else:
-                        # Get whatever else is stored
-                        entry_obj[field] = value
+                        setattr(entry, csv_field, value)
+                
+                # else if we have a schema mapping, use that
+                elif csv_field in schema:
+                    csv_field = schema[csv_field]
+                    # convert to byte array if required
+                    if isinstance(vault_attributes.get(csv_field),bytearray):
+                        setattr(entry, csv_field, bytearray(value, UTF8))
+                    else:
+                        setattr(entry, csv_field, value)
+                
+                # store anything else in "other"
+                else:
+                    # convert the firefox timestamps to pendulum date string.
+                    if schema_name == "firefox" and csv_field in FIREFOX_TIME_FIELDS:
+                        firefox_process_timestamp(entry, clean_row, csv_field)
+                    
+                    # convert the proton pass timestamps to pendulum date string.
+                    elif schema_name == "proton" and csv_field in PROTON_TIME_FIELDS:
+                        proton_process_timestamp(entry, clean_row, csv_field)
 
-            # firefox
-            # created =pendulum.from_timestamp(int(row.get("timeCreated", ""))//1000).to_date_string()
-            # last_used = pendulum.from_timestamp(int(row.get("timeLastUsed", ""))//1000).to_date_string()
-            # last_changed = pendulum.from_timestamp(int(row.get("timePasswordChanged", ""))//1000).to_date_string()
-            # date_str = f"Date created  {created}\nLast_used {last_used}\nLast Changed {last_changed}"
-            # entry_obj["note"] = date_str
+                    # Deal with bitwardens custom fields
+                    elif schema_name == "bitwarden" and csv_field == "fields":
+                        # bitwarden exports custom fields like 'secret field: other password\nother field: atestt'
+                        # split on newline then on colon
+                        for line in value.splitlines():
+                            if ":" not in line:
+                                continue
+                            field_key, value = line.split(":")
+                            # Store it in other
+                            entry.other[field_key] = clean_val(value)
 
-            # entry_obj["site"] = entry_obj["site"].removeprefix("https://")
-            # entry_obj["site"] = entry_obj["site"].removeprefix("www.")
+                    else:
+                        entry.other[csv_field] = value
 
-            entry_obj["created_date"] = pendulum.now().to_iso8601_string()
-            entry_obj["edited_date"] = pendulum.now().to_iso8601_string()
-            entry_obj["imported_from"] = filepath
+            # Remove the following prefixes from all entries
+            entry.site = entry.site.removeprefix("https://")
+            entry.site = entry.site.removeprefix("www.")
 
-            plaintext = json.dumps(entry_obj)
-            entry_obj.clear()
-            del entry_obj
+            entry.other["imported_from"] = filepath
 
             # Generate unique entry ID
             eid = secrets.token_bytes(EID_LEN)
@@ -469,9 +568,13 @@ def import_csv(filepath, encrypted_entries, key):
             eid = bytes_to_str(eid)
 
             # Encrypt using master key
-            encrypted_blob = encrypt(plaintext, key, eid)
-            del plaintext
-
+            if entry.site == "temp_import_site":
+                msg = f"Error occured while importing data from {filepath}."\
+                    f"Please check for correct field mapping."
+                logging.error(msg)
+            encrypted_blob = encrypt_entry(entry, key, eid)
+            entry.wipe()
+            del entry
             
             # Save into vault
             encrypted_entries[eid] = encrypted_blob
@@ -480,3 +583,101 @@ def import_csv(filepath, encrypted_entries, key):
     save_vault(encrypted_entries, key)
     print(f"Imported {imported_count} entries from CSV.")
     return True
+
+def clean_val(v):
+    """
+    Normalize a value to a stripped string.
+
+    Returns an empty string for None values.
+
+    Args:
+        v: Input value.
+
+    Returns:
+        Cleaned string value.
+    """
+    return v.strip() if v is not None else ""
+
+def normalize_newlines(s: str) -> str:
+    """
+    Normalize escaped newlines in a string.
+
+    Converts literal CRLF and LF escape sequences to newline characters.
+
+    Args:
+        s: Input string.
+
+    Returns:
+        String with normalized newlines.
+    """
+    return s.replace("\\r\\n", "\n").replace("\\n", "\n")
+
+def detect_schema(headers: set[str]) -> str | None:
+    """
+    Detect the best-matching import schema.
+
+    Selects the schema with the highest overlap with the provided
+    header set.
+
+    Args:
+        headers: CSV header names.
+
+    Returns:
+        Schema name if detected, otherwise None.
+    """
+    best_match = None
+    best_score = 0
+
+    for browser, schema in SCHEMAS.items():
+        score = len(headers & schema.keys())
+        if score > best_score:
+            best_score = score
+            best_match = browser
+
+    return best_match if best_score >= 2 else None
+
+def firefox_process_timestamp(entry: Entry, row: dict[str, str], field: str) -> None:
+    """
+    Process a Firefox timestamp field.
+
+    Converts a millisecond Unix timestamp to a date string and stores
+    it on the entry.
+
+    Args:
+        entry: Vault entry to update.
+        row: Source data row.
+        field: Timestamp field name.
+
+    Side Effects:
+        Updates entry metadata.
+    """
+    ts = row.get(field)
+    if ts and ts.isdigit():
+        entry.other[field] = (
+            pendulum.from_timestamp(int(ts) // 1000)
+            .to_date_string()
+        )
+    return
+
+def proton_process_timestamp(entry: Entry, row: dict[str, str], field: str) -> None:
+    """
+    Process a Proton timestamp field.
+
+    Converts a Unix timestamp to a date string and stores it on
+    the entry.
+
+    Args:
+        entry: Vault entry to update.
+        row: Source data row.
+        field: Timestamp field name.
+
+    Side Effects:
+        Updates entry metadata.
+    """
+    ts = row.get(field)
+    if ts and ts.isdigit():
+        entry.other[field] = (
+            pendulum.from_timestamp(int(ts))
+            .to_date_string()
+        )
+    return

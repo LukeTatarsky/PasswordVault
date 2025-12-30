@@ -8,7 +8,7 @@ import sys
 # Vault settings
 # ==============================================================
 # Software version
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 # Name of encrypted vault file
 if getattr(sys, "frozen", False):
@@ -29,6 +29,9 @@ IMPORT_DIR.mkdir(exist_ok=True)
 
 VAULT_FILE = VAULT_DIR / "passwords.vault"
 
+# Word lists retrieved from https://github.com/dmuth/diceware
+WORD_LIST = BASE_DIR / "src/data/large_wordlist.txt"
+
 # Canary to verify master password. Do not change once vault is created.
 KEY_CHECK_STRING = "MasterKeyValidation"
 
@@ -47,21 +50,31 @@ NONCE_LEN = 12
 
 
 # ==============================================================
-# Password generation defaults (strong but practical)
+# Password generation defaults
 # ==============================================================
 PASS_DEFAULTS = {
-    "length": 20,                   # Default generated password length
-    "min_length": 0,                # Minimum allowed (manual or generated)
-    "min_upper": 3,
-    "min_lower": 3,
-    "min_digits": 3,
-    "min_symbols": 3,
+    "length": 21,                   # Default generated password length
+    "max_length": 1000,               
+    "min_upper": 4,
+    "min_lower": 4,
+    "min_digits": 4,
+    "min_symbols": 4,
+    "min_length": 0, 
     "max_consecutive": 3,            # Reject "aaaa", "1111", etc.
-    "avoid_ambiguous": True,         
+    "avoid_ambiguous": False,         
     "ambiguous_chars": "lI1oO08",
     "symbols_pool":   "!@#()[]|?$%^*_-+.=",
+    "use_safe_symbs": False,
     "safe_symbols":   "!@#$&=_-",
+    "phrase_len": 5,
+    "phrase_sep": ["_", "-", ".", "!"],
+    "phrase_use_nums": True,
 }
+PASS_DEFAULTS["min_length"] = PASS_DEFAULTS["min_upper"] \
+                            + PASS_DEFAULTS["min_lower"] \
+                            + PASS_DEFAULTS["min_digits"] \
+                            + PASS_DEFAULTS["min_symbols"]
+
 PASSWORD_HISTORY_LIMIT = 5        # Number of previous passwords to keep
 
 # ==============================================================

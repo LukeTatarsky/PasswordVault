@@ -6,31 +6,31 @@ PasswordVault - a secure offline password manager
 # ==============================================================
 import os
 import sys
-import json
 import time
 import atexit
-import threading
 import secrets
-import string
 import gc
 import logging
+import getpass
 
 # ==============================================================
-# Third-party imports
+# Other imports
 # ==============================================================
-from config.config_vault import *
-from config.logging_config import setup_logging
-from utils.crypto_utils import *
-from utils.totp_qr_code import *
-from utils.password_utils import *
-from utils.vault_utils import *
-from utils.import_export import *
-from utils.user_input import *
-from utils.password_generator import *
 
 try:
-    import pyperclip
     import pendulum
+    from config.config_vault import *
+    from config.logging_config import setup_logging
+    from utils.Entry import Entry, bytes_to_str
+    from utils.vault_utils import display_entry, save_vault, load_vault, list_entries, change_master_password
+    from utils.crypto_utils import decrypt_entry, encrypt_entry
+    from utils.password_generator import ask_password
+    from utils.user_input import get_note_from_user, get_int
+    from utils.clipboard_utils import copy_to_clipboard, clear_clipboard_history
+    from utils.totp_qr_code import show_totp_code, show_totp_qr
+    from utils.password_utils import audit_entry, audit_vault
+    from utils.import_export import import_csv, import_json, import_portable, export_json, export_portable
+
     
 except ImportError as e:
     missing_package = e.name if hasattr(e, "name") else "unknown package"
@@ -39,78 +39,60 @@ except ImportError as e:
     logging.error(f"  {missing_package} is not installed. See requirements.txt")
     print("\nInstall with:")
     print("  pip install -r requirements.txt")
-    time.sleep(5)
+    time.sleep(10)
     sys.exit(1)
 
 # ==============================================================
 # Functions
 # ==============================================================
 
-
-def update_entry(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int:
+def update_entry(encrypted_entries: dict[str, str], entry: Entry, key: bytes, eid: str) -> Entry | None:
     """
-    Interactively edit a password vault entry via the command line.
+    Display an interactive menu for editing a single vault entry.
 
-    Loads and decrypts the specified entry, then presents a menu that
-    allows the user to edit fields, view the entry, save changes,
-    delete the entry, or cancel without saving.
-
-    Changes are written to disk only after explicit confirmation.
-    Deletions also require explicit confirmation.
+    Allows updating site, account, password, note, TOTP key, and recovery keys.
+    Handles password history, encryption, and deletion.
 
     Args:
-        encrypted_entries: In-memory mapping of entry IDs to encrypted tokens.
-        key: key used for decryption and encryption.
-        eid: Entry ID to edit.
+        encrypted_entries: Mapping of entry IDs to encrypted tokens.
+        entry: The Entry object to edit.
+        key: Symmetric key used for encryption/decryption.
+        eid: Entry ID used as associated data in encryption.
 
     Returns:
-        0 if changes were saved or the operation was cancelled.
-        1 if the entry was deleted or an error occurred.
+        Updated Entry object if changes are saved.
+        None if the entry was deleted.
+        Entry object restored from vault if changes were discarded.
 
     Side Effects:
-        Prompts for user input.
-        Prints status and error messages.
-        Writes updated vault data to disk on save or delete.
+        - Prompts for user input.
+        - Modifies terminal display.
+        - Copies sensitive data to clipboard when updating passwords.
+        - Updates vault file via `save_vault`.
 
     Security Notes:
-        - Requires explicit confirmation before saving or deleting.
-        - Enforces non-empty site names.
-        - Automatically updates edit timestamps on save.
-        - Maintains password history according to configuration.
+        - Clipboard contents are sensitive; respect auto-clear policies.
+        - Password history is maintained.
+        - Entry object is wiped from memory upon deletion or discard.
     """
-    if eid not in encrypted_entries:
-        print("ID not found")
-        return 1
-
-    # Load and decrypt the entry
-    try:
-        data = json.loads(decrypt(encrypted_entries[eid], key, eid))
-    except InvalidTag:
-            res = delete_corrupted_entry(encrypted_entries, key, eid)
-            return res
-    except Exception:
-        print("Entry corrupted — cannot edit")
-        return 1
-    
     choice = ''
 
     while True:
         gc.collect()
 
-
         wipe_terminal()
 
         if choice == '5':
             # Show all info
-            display_entry(data, show_all=True)
+            display_entry(entry, show_all=True)
         else:
             # Show basic info
-            display_entry(data, None, None, show_pass=False)
+            display_entry(entry)
 
         print(
             f"\n--- Editing Menu --- \n"
             f"   1. Edit Site          5. Display Entry (shows all) \n"
-            f"   2. Edit Account       6. Save & Exit \n"
+            f"   2. Edit Account       6. Save Entry \n"
             f"   3. Edit Password      7. Delete Entry \n"
             f"   4. Edit Note          8. Cancel (discard changes) \n"
             f"   9. Edit Recovery Keys \n"
@@ -120,21 +102,18 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int
         choice = input(" > ").strip()
 
         if choice == "1":
-            current = data.get('site', '')
-            new_site = input(f"New site [{current}]: ").strip()
-            if new_site and new_site != current:
-                data["site"] = new_site
+            new_site = input(f"New site [{entry.site}]: ").strip()
+            if new_site:
+                entry.site = new_site
+                del new_site
                 print("   Site updated")
-            else:
-                print("   Site unchanged")
-            del new_site
 
         elif choice == "2":
-            current = data.get('account') or ''
-            new_acc = input(f"New account [{current}]: ").strip()
-            data["account"] = new_acc or ''
-            del new_acc
-            print("   Account updated")
+            new_acc = input(f"New account [{entry.account}]: ").strip()
+            if new_acc:
+                entry.account = new_acc
+                del new_acc
+                print("   Account updated")
 
         elif choice == "3":
             new_pw = ask_password("New password:")
@@ -144,145 +123,126 @@ def update_entry(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int
                 copy_to_clipboard(new_pw, prompt=True)
 
             # Keep password history
-            pw_history = data.get("password_history", [])
-            pw_history.insert(0, {"password" : data.get("password", ""),
-                                "last_used" : pendulum.now().to_iso8601_string()})
-            data["password_history"] = pw_history[:PASSWORD_HISTORY_LIMIT]
-            data["password"] = new_pw
-            pw_history.clear()
-            new_pw = None
-            del new_pw, pw_history
+            entry.pw_hist.insert(0, (pendulum.now().to_iso8601_string(), entry.password.decode(UTF8)))
+            entry.pw_hist = entry.pw_hist[:PASSWORD_HISTORY_LIMIT]
+            entry.password = new_pw
             print("   Password updated")
 
         elif choice == "4":
             print ("\nCurrent note:")
             print(SEP_SM)
-            print(data.get("note", "")) 
+            print(entry.note) 
             print(SEP_SM)
-            note = get_note_from_user()
-            data["note"] = note
-            note = None
-            del note
+            entry.note = get_note_from_user()
             print("   Note updated")
 
         elif choice == "5":
             continue
 
         elif choice == "6":
-            if data.get("site", "").strip() == "":
-                print("   Error: Site cannot be empty!")
-                continue
 
-            confirm = input(f"\nSave changes to {data.get('site', '')}? (type 's' to confirm): ")
+            confirm = input(f"\nSave changes to {entry.site}? (type 's' to confirm): ")
             if confirm.strip().lower() != "s":
                 print("   Save cancelled")
                 continue
 
             # Update timestamp
-            data["edited_date"] = pendulum.now().to_iso8601_string()
+            entry.edited = pendulum.now().to_iso8601_string()
 
             # Re-encrypt and save
-            blob = encrypt(json.dumps(data, separators=(',', ':')), key, eid)
+            blob = encrypt_entry(entry, key, eid)
             encrypted_entries[eid] = blob
             save_vault(encrypted_entries, key)
             wipe_terminal()
             print("\nEntry updated and saved successfully!")
-            data.clear()
-            data = None
-            del data
-            return 0
+            return entry
 
         elif choice == "7":
             confirm = input(f"\nDelete this entry permanently? (type 'del' to confirm): ")
             if confirm.strip().lower() == "del":
+                entry.wipe()
+                del entry
                 del encrypted_entries[eid]
                 save_vault(encrypted_entries, key)
                 wipe_terminal()
                 print("\nEntry deleted.")
-                data.clear()
-                data = None
-                del data
-                return 1
+                return None
             
         elif choice == "8":
             wipe_terminal()
             print("All changes discarded.")
-            data.clear()
-            data = None
-            del data
-            return 0
+            entry.wipe()
+            del entry
+            return decrypt_entry(encrypted_entries[eid], key, eid)
         
         elif choice == "9":
             print ("\nCurrent Keys:")
             print(SEP_SM)
-            print(data.get("keys", "")) 
+            print(entry.rec_keys.decode(UTF8)) 
             print(SEP_SM)
-            keys = get_note_from_user(prompt="Enter Recovery Keys:")
-            data["keys"] = keys
-            keys = None
-            del keys
+            entry.rec_keys = bytearray(get_note_from_user(prompt="Enter Recovery Keys:").encode('utf-8'))
             print("   Keys updated")
 
         elif choice == "0":
             print ("\nCurrent TOTP code:")
             print(SEP_SM)
-            print(data.get("totp", "")) 
+            print(entry.totp.decode(UTF8)) 
             print(SEP_SM)
-            totp = input("Enter TOTP Generator Key: ").strip()
-            data["totp"] = totp
-            totp = None
+            entry.totp = bytearray(input("Enter TOTP Generator Key: ").strip().encode('utf-8'))
             print("   TOTP updated")
 
         else:
             print("   Invalid option — choose 0-9")
 
-
 def entry_menu(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int:
     """
-    Display and handle the interactive menu for a single vault entry.
+    Display the interactive menu for a single vault entry.
 
-    Presents actions for viewing, copying, editing, and managing a
-    decrypted vault entry, including password, account, history, and
-    TOTP-related operations.
+    Provides actions for viewing, copying, editing, auditing, and managing
+    a decrypted vault entry, including password, account, TOTP, and history.
 
     Args:
         encrypted_entries: Mapping of entry IDs to encrypted tokens.
-        key: key used to decrypt entry data.
+        key: Symmetric key used for encryption/decryption.
         eid: Entry ID to operate on.
 
     Returns:
         0 if the user exits normally.
-        1 if the entry cannot be displayed or an error occurs.
+        1 if the entry cannot be decrypted or an error occurs.
 
     Side Effects:
-        Prompts for user input.
-        Copies sensitive data to the clipboard.
-        Prints entry information and status messages.
+        - Prompts for user input.
+        - Copies sensitive data to the clipboard.
+        - Prints entry information and status messages.
+        - Can trigger `update_entry` and audit functions.
 
     Security Notes:
         - Clipboard copies may auto-clear after a timeout.
         - Sensitive data is cleared from memory where possible.
-        - Passwords are not displayed unless explicitly requested.
+        - Passwords and TOTP codes are displayed only when explicitly requested.
     """
     choice_2 = ''
-
-
+    blob = encrypted_entries.get(eid)
+    entry = decrypt_entry(blob, key, eid)
+    if entry is None:
+        # error, back to main
+        logging.error(f"{pendulum.now().to_iso8601_string()} Error decrypting entry {eid}")
+        return 1
+    
     wipe_terminal()
 
     while True:
         gc.collect()
-
+        # Show basic info
         if choice_2 == '':
-            res = display_entry(encrypted_entries, key, eid)
-            if res != 0:
-                return 1
+            display_entry(entry)
 
         print(f"\n--- Entry Menu ---\n"
                 f"(C) Copy Password    (U) Copy Account\n"
                 f"(S) Show Password    (H) Password History \n"
                 f"(A) Show All         (T) Get TOTP Code \n"
                 f"(E) Edit Entry       (QR) Show TOTP QR code \n"
-                f"(Enter) Main Menu "
+                f"(Enter) Main Menu    (AUD) Audit Entry"
                 ,end="\n > ")
         choice_2 = input().strip().lower()
 
@@ -290,93 +250,69 @@ def entry_menu(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int:
 
         # == COPY PASSWORD ===================================
         if choice_2 == "u":
-            entry_data = get_entry_data(encrypted_entries, key, eid)
-            user = entry_data.get("account", "") if entry_data else ""
-            copy_to_clipboard(user, timeout=0, prompt=False)
-            user = None
-            entry_data = None
-            del entry_data
+            copy_to_clipboard(entry.account, timeout=0, prompt=False)
             choice_2 = ''
             continue
 
         # == COPY PASSWORD ===================================
         if choice_2 == "c":
-            entry_data = get_entry_data(encrypted_entries, key, eid)
-            pw = entry_data.get("password", "") if entry_data else ""
-            copy_to_clipboard(pw, timeout=CLIPBOARD_TIMEOUT, prompt=False)
-            pw = None
-            entry_data = None
+            copy_to_clipboard(entry.password, timeout=CLIPBOARD_TIMEOUT, prompt=False)
             choice_2 = ''
             continue
         
         # == SHOW PASSWORD ===================================
         elif choice_2 == "s":
-            res = display_entry(encrypted_entries,
-                key,
-                eid,
-                show_pass=True,
-                show_history=False
-            )
-            if res != 0:
-                continue
+            display_entry(entry, show_pass=True)
 
         # == SHOW PASSWORD HISTORY ============================
         elif choice_2 == "h":
-            res = display_entry(
-                encrypted_entries,
-                key,
-                eid,
-                show_pass=False,
-                show_history=True
-            )
-            if res != 0:
-                continue
+            display_entry(entry, show_pw_hist=True)
 
         # == SHOW COMPLETE ENTRY ==============================
         elif choice_2 == "a":
-            res = display_entry(
-                encrypted_entries,
-                key,
-                eid,
-                show_all=True
-            )
-            if res != 0:
-                continue
+            display_entry(entry, show_all=True)
         
         # == GET TOTP CODE ==============================
         elif choice_2 == "t":
-            totp_key = get_entry_data(encrypted_entries, key, eid).get("totp")
-            if totp_key:
-                show_totp_code(totp_key)
-                totp_key = b"\x00" * len(totp_key)
-                del totp_key
+            if entry.totp:
+                res = show_totp_code(entry)
+                if res == 0:
+                    wipe_terminal()
+                else:
+                    print("Could not generate TOTP code.")
             else:
                 print("No TOTP key available.")
-            choice_2 = ''
+            choice_2 = ""
 
         # == EDIT ENTRY =======================================
         elif choice_2 == "e":
-            res = update_entry(encrypted_entries, key, eid)
+            entry = update_entry(encrypted_entries, entry, key, eid)
             choice_2 = ''
-            if res == 1:
-                # error, back to main
-                break
-            
             
         # == Authenticator QR code =============================   
         elif choice_2 == "qr":
-            
-            secret=get_entry_data(encrypted_entries, key, eid).get("totp")
-            if secret:
-                issuer=get_entry_data(encrypted_entries, key, eid).get("site")
-                label=get_entry_data(encrypted_entries, key, eid).get("account")
-                show_totp_qr(secret, label, issuer)
-                secret = b"\x00" * len(secret)
-                del secret
+            if entry.totp:
+                show_totp_qr(entry)
             else:
                 print("No TOTP key available")
             choice_2 = ''
-            
+
+        # == AUDIT ENTRY ===================================
+        elif choice_2 == "aud":
+            t_exposure = input("\n Would you like to check for exposed passwords? (y/n): ").strip()
+            t_exposure = 1 if t_exposure == "y" else 0
+
+            confirm = input("\n Type 'aud' to confirm: ").strip()
+            if confirm != "aud":
+                continue
+            display_entry(entry,show_pass=True)
+            audit_entry(entry,
+                        encrypted_entries,
+                        key,
+                        eid,
+                         test_exposure=t_exposure, 
+                         test_strength=True, 
+                         test_reuse=True)
 
         elif choice_2 in {"", "enter", "q"}:
             break
@@ -386,113 +322,6 @@ def entry_menu(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int:
             choice_2 = ''
 
     return 0
-
-
-def copy_to_clipboard(text: str,
-                       timeout: int = CLIPBOARD_TIMEOUT,
-                         prompt = True) -> None:
-    """
-    Copy sensitive text to the system clipboard with optional auto-clear.
-
-    Optionally prompts the user before copying. If a timeout is
-    specified, a background daemon thread clears the clipboard after
-    the delay to reduce exposure of sensitive data.
-
-    Args:
-        text: Text to copy to the clipboard.
-        timeout: Number of seconds before the clipboard is cleared.
-            A value of 0 or less disables auto-clear.
-        prompt: If True, prompt the user before copying. If False,
-            copy immediately.
-
-    Returns:
-        None
-
-    Side Effects:
-        Copies data to the system clipboard.
-        Spawns a background daemon thread if auto-clear is enabled.
-
-    Security Notes:
-        - Clipboard is cleared after the timeout when enabled.
-        - Clipboard history may be wiped depending on configuration.
-        - Errors during clipboard operations are suppressed to avoid
-          crashing the application.
-    """
-    if not text:
-        print(" Nothing to copy.")
-        return
-    
-    if prompt and input(" Copy to clipboard? (y/n): ").strip().lower() != "y":
-        return
-    
-    # Copy to clipboard
-    pyperclip.copy(text)
-    text = " Copied!" + (f" (auto-clears in {timeout}s)" if timeout > 0 else "")
-    print(text, flush=True)
-
-    if timeout <= 0:
-        return
-
-    def auto_clear():
-        time.sleep(timeout)
-        try:
-            pyperclip.copy("")
-            clear_clipboard_history()
-        except Exception:
-            # prevent clipboard errors from crashing program
-            pass
-
-    threading.Thread(target=auto_clear, daemon=True).start()
-
-    return
-
-def clear_clipboard_history(clipboard_length: int = CLIPBOARD_LENGTH):
-    """
-    Attempt to wipe clipboard history by flooding it with random data.
-
-    Overwrites the clipboard repeatedly with randomly generated strings
-    in an effort to evict sensitive entries from clipboard history.
-    Behavior depends on platform and clipboard manager capabilities.
-
-    Args:
-        clipboard_length: Number of random clipboard entries to generate.
-
-    Returns:
-        None
-
-    Side Effects:
-        Overwrites the system clipboard multiple times.
-        Introduces small delays to avoid clipboard throttling.
-
-    Security Notes:
-        - Disabled if WIPE_CLIPBOARD is False in configuration.
-        - Best-effort only; some clipboard managers retain long histories.
-        - Final clipboard content is a non-sensitive placeholder string.
-    """
-    # Simple overwrite on exit
-    pyperclip.copy("")
-
-    if not WIPE_CLIPBOARD:
-        return
-    
-    char_set = string.ascii_letters + string.digits + "!@#$%^&*"
-
-    for i in range(clipboard_length):
-        fake_data = ''.join(secrets.choice(char_set) for _ in range(40))
-        fake_data = f"[{i:03d}] {fake_data} - {secrets.token_hex(EID_LEN)}"
-
-        pyperclip.copy(fake_data)
-        
-        # Defeats throttling
-        time.sleep(0.07)
-
-    pyperclip.copy("Clipboard history cleared")
-    return
-
-def wipe_last_lines(n: int):
-    for _ in range(n):
-        sys.stdout.write("\033[F\033[K")
-    sys.stdout.flush()
 
 def wipe_terminal(force=False):
     """
@@ -510,6 +339,7 @@ def wipe_terminal(force=False):
     if CLEAR_SCREEN and force == False:
         os.system('cls' if os.name == 'nt' else 'clear')
 
+
 # ==============================================================
 # MAIN
 # ==============================================================
@@ -518,8 +348,10 @@ def main():
     print("- Password Manager —\n")
 
     # Main Entry point
+
     key, encrypted_entries, salt = load_vault()
-    
+    # key, encrypted_entries, salt = load_vault(b'l')
+
     # clears clipboard on exit
     atexit.register(clear_clipboard_history)
     choice = ''
@@ -528,7 +360,7 @@ def main():
         gc.collect()
 
         if choice != "9":
-            time.sleep(0.4)
+            time.sleep(.3)
             wipe_terminal()
 
         print("\n--- Main Menu ---")
@@ -543,31 +375,18 @@ def main():
             if not site:
                 print("Site name cannot be empty!")
                 continue
+            entry = Entry(site)
             
-            account = input("Account: ").strip()
+            entry.account = input("Account: ").strip()
 
-            note = get_note_from_user()
+            entry.note = get_note_from_user()
 
-            password = ask_password("New password")
-            if password is None:
+            entry.password = ask_password("New password") 
+            if entry.password is None:
                 continue
-            if password:
-                copy_to_clipboard(password)
+            if entry.password:
+                copy_to_clipboard(entry.password)
 
-            created_date = pendulum.now().to_iso8601_string()
-
-            # create the blob
-            entry = json.dumps({"site": site,
-                                "account": account,
-                                "password": password,
-                                "note": note,
-                                "keys": "",
-                                "created_date": created_date,
-                                "edited_date": created_date,
-                                "password_history": [],
-                                "totp": ""}, separators=(',', ':'),
-                                )
-            
             # Generate unique entry identifier
             eid = secrets.token_bytes(EID_LEN)
             while eid in encrypted_entries:
@@ -576,17 +395,14 @@ def main():
             # Convert eid bytes to string
             eid = bytes_to_str(eid)
 
-            # Encrypt data
-            encrypted_blob = encrypt(entry, key, eid)
-
-            # Remove references
-            del entry, note, password, site, account
-
-            # Save
-            encrypted_entries[eid] = encrypted_blob
+            # Encrypt and save
+            encrypted_entries[eid] = encrypt_entry(entry, key, eid)
+            entry.wipe()
+            del entry, site
             save_vault(encrypted_entries, key)
 
-            print(f"Entry added to vault")
+            # Go straight to entry menu
+            entry_menu(encrypted_entries, key, eid)
 
 
         # == GET ENTRY =======================================
@@ -679,7 +495,7 @@ def main():
 
         elif choice == "import_portable":
             filename = input("Enter JSON filename to import: ").strip()
-            import_portable(f"{filename}.json", encrypted_entries, key)
+            import_portable(f"{filename}.vault", encrypted_entries, key)
 
         else:
             print("Invalid Choice")
