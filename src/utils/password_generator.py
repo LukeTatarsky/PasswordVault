@@ -293,7 +293,7 @@ def ask_password(prompt: str = "Password:") -> bytearray | None:
                 print (f"\n  {e}")
                 continue
 
-            print(f" Generated: ", end="")
+            print(f" Generated: ", end="", flush= True)
             print_bytearray(pw)
             if input("\n Accept this password? (y/n): ").strip().lower() == "n":
                 continue
@@ -330,7 +330,7 @@ def ask_password(prompt: str = "Password:") -> bytearray | None:
                         len(PASS_DEFAULTS["phrase_sep"]))].encode(UTF8))
                 del word
                 
-            print(f"\n Generated: ", end="")
+            print(f"\n Generated: ", end="", flush= True)
             print_bytearray(pw)
             if input("\n Accept this password? (y/n): ").strip().lower() == "n":
                 continue
