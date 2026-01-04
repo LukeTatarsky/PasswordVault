@@ -39,7 +39,7 @@ except ImportError as e:
     logging.error(f"  {missing_package} is not installed. See requirements.txt")
     print("\nInstall with:")
     print("  pip install -r requirements.txt")
-    time.sleep(10)
+    time.sleep(2)
     sys.exit(1)
 
 # ==============================================================
@@ -126,6 +126,7 @@ def update_entry(encrypted_entries: dict[str, str], entry: Entry, key: bytes, ei
             entry.pw_hist.insert(0, (pendulum.now().to_iso8601_string(), entry.password.decode(UTF8)))
             entry.pw_hist = entry.pw_hist[:PASSWORD_HISTORY_LIMIT]
             entry.password = new_pw
+
             print("   Password updated")
 
         elif choice == "4":
@@ -326,7 +327,6 @@ def entry_menu(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int:
 def wipe_terminal(force=False):
     """
     Clears the terminal screen if CLEAR_SCREEN set to True.
-
     Args:
         force: Bypasses CLEAR_SCREEN.
 
@@ -338,7 +338,6 @@ def wipe_terminal(force=False):
     """
     if CLEAR_SCREEN and force == False:
         os.system('cls' if os.name == 'nt' else 'clear')
-
 
 # ==============================================================
 # MAIN
@@ -360,7 +359,7 @@ def main():
         gc.collect()
 
         if choice != "9":
-            time.sleep(.3)
+            time.sleep(.1)
             wipe_terminal()
 
         print("\n--- Main Menu ---")

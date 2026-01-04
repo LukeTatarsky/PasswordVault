@@ -173,6 +173,35 @@ def decrypt_entry(token: str, key: bytes, eid: str) -> "Entry":
         associated_data=str_to_bytes(eid))
     )
 
+def decrypt_entry_searchable(token: str, key: bytes, eid: str) -> "Entry":
+    """
+    Decrypt a vault entry token into an Entry object.
+
+    Args:
+        token: Base64-encoded encrypted entry.
+        key: Symmetric key for ChaCha20Poly1305 decryption.
+        eid: Entry ID used as associated data (AEAD).
+
+    Returns:
+        Entry object reconstructed from decrypted data.
+
+    Raises:
+        Exception if decryption fails or data is invalid.
+
+    Security Notes:
+        - Uses AEAD; ensures ciphertext integrity.
+    """
+    aead = ChaCha20Poly1305(key)
+    raw = base64.urlsafe_b64decode(token.encode(UTF8))
+    nonce = raw[:NONCE_LEN]
+    ciphertext = raw[NONCE_LEN:]
+ 
+    return Entry.from_bytes(aead.decrypt(
+        nonce=nonce,
+        data=ciphertext,
+        associated_data=str_to_bytes(eid))
+    )
+
 def encrypt_entry(entry: Entry, key: bytes, eid: str) -> str:
     """
     Encrypt a vault entry into a base64-encoded token.

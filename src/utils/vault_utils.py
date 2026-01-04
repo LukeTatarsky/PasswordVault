@@ -337,11 +337,6 @@ def list_entries(encrypted_entries: dict[str, str], key: bytes,
 
     for eid, blob in encrypted_entries.items():
         try:
-            # data = json.loads(decrypt(blob, key, eid))
-            # site = data.get("site", "")
-            # account = data.get("account", "")
-            # note = data.get("note", "")
-            # del data
             entry = decrypt_entry(blob, key, eid)
 
             # Build searchable text
