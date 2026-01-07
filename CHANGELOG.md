@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [1.4.1] — 2026-01-07
+### Changed
+- changed a few things to allow exportation of old vaults to csv. 
+
+
+### Added
+- csv_export 
+
+### Migration Notes
+- Preparation to migrate to version 2.0.0. Version 2 will use a different encryption structure. Old encrypted vaults will not work.
+- export previous vault with csv_export and append "_fields." to headers (password, rec_keys, totp) before importing to version 2.
+
+---
+
 ## [1.4.0] — 2025-12-29
 ### Changed
 - The codebase was refactored to operate on Entry objects, centralizing encryption, serialization, and validation logic and eliminating ad-hoc field handling.

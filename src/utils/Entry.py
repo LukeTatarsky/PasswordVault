@@ -1,34 +1,7 @@
 from dataclasses import dataclass, field
 from typing import List, Tuple, Dict
-import pendulum, base64, json, sys, secrets
-from config.config_vault import UTF8, NONCE_LEN
-from contextlib import contextmanager
-from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
-
-# @contextmanager
-# def _ephemeral_decrypt(ciphertext: bytes, key: bytes):
-    
-#     buf = bytearray(decrypt_secret(ciphertext, key))
-#     try:
-#         yield buf
-#     finally:
-#         for i in range(len(buf)):
-#             buf[i] = 0
-
-# def decrypt_secret(token: str, key: bytes) -> bytearray:
-#     """
-#     Decrypt a ChaCha20-Poly1305 encrypted secret.
-#     """
-#     aead = ChaCha20Poly1305(key)
-
-#     raw = base64.urlsafe_b64decode(token.encode(UTF8))
-#     nonce = raw[:NONCE_LEN]
-#     ciphertext = raw[NONCE_LEN:]
-    
-#     secret = bytearray(aead.decrypt(
-#         nonce=nonce,
-#         data=ciphertext))
-#     return secret
+import pendulum, base64, json, sys
+from config.config_vault import UTF8
 
 @dataclass
 class Entry:
@@ -42,10 +15,6 @@ class Entry:
     site: str
     account: str = ''
     note: str = ''
-
-    pw_enc: bytes = b''
-    keys_enc: bytes = b''
-    totp_enc: bytes = b''
 
     password: bytearray = field(default_factory=bytearray)
     rec_keys: bytearray = field(default_factory=bytearray)
@@ -82,15 +51,22 @@ class Entry:
             f"created={self.created}, "
             f"edited={self.edited})"
         )
-
-    # def decrypt_pw(self, k_secret):
-    #     return _ephemeral_decrypt(self.pw_enc, k_secret)
-
-    # def decrypt_totp(self, k_secret):
-    #     return _ephemeral_decrypt(self.totp_enc, k_secret)
-
-    # def decrypt_keys(self, k_secret):
-    #     return _ephemeral_decrypt(self.keys_enc, k_secret)
+    
+    # def __repr__(self):
+    #     return (
+    #         f"Entry(\n"
+    #         f" site={self.site} \n"
+    #         f" account={self.account} \n"
+    #         f" pw={self.password} \n"
+    #         f" note={self.note} \n"
+    #         f" keys={self.rec_keys} \n"
+    #         f" totp={self.totp} \n"
+    #         f" pw_hist={self.pw_hist} \n"
+    #         f" other={self.other} \n"
+    #         f" url={self.url} \n"
+    #         f" created={self.created} \n"
+    #         f" edited={self.edited})"
+    #     )
     
     def wipe(self):
         """
@@ -159,14 +135,14 @@ class Entry:
             "account": self.account,
             "note": self.note,
             "password": self.password.decode(UTF8, errors="strict"),
-            "keys": self.rec_keys.decode(UTF8, errors="strict"),
+            "rec_keys": self.rec_keys.decode(UTF8, errors="strict"),
             "totp": self.totp.decode(UTF8, errors="strict"),
-            "password_history": [
-                (timestamp, secret)
+            "pw_hist": [
+                [timestamp, secret]
                 for timestamp, secret in self.pw_hist
             ],
-            "created_date": self.created,
-            "edited_date": self.edited,
+            "created": self.created,
+            "edited": self.edited,
             "other": dict(self.other),
         }
     
@@ -262,7 +238,7 @@ class Entry:
     @classmethod
     def from_bytes(cls, raw: bytes) -> "Entry":
         """
-        Deserialize an entry from JSON bytes. Used in decryption.
+        Deserialize an entry from JSON bytes.
 
         Args:
             raw: UTF-8 encoded JSON bytes.
@@ -288,7 +264,7 @@ def _b64_to_btArr(s: str) -> bytearray:
 
 def str_to_bytes(eid_str: str) -> bytes:
     """
-    Decode a URL-safe base64 string. Used in encryption.
+    Decode a URL-safe base64 string.
 
     Args:
         eid_str: Encoded string.

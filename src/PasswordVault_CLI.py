@@ -29,7 +29,7 @@ try:
     from utils.clipboard_utils import copy_to_clipboard, clear_clipboard_history
     from utils.totp_qr_code import show_totp_code, show_totp_qr
     from utils.password_utils import audit_entry, audit_vault
-    from utils.import_export import import_csv, import_json, import_portable, export_json, export_portable
+    from utils.import_export import import_csv, import_json, import_portable, export_json, export_portable, export_csv
 
     
 except ImportError as e:
@@ -39,7 +39,7 @@ except ImportError as e:
     logging.error(f"  {missing_package} is not installed. See requirements.txt")
     print("\nInstall with:")
     print("  pip install -r requirements.txt")
-    time.sleep(2)
+    time.sleep(10)
     sys.exit(1)
 
 # ==============================================================
@@ -126,7 +126,6 @@ def update_entry(encrypted_entries: dict[str, str], entry: Entry, key: bytes, ei
             entry.pw_hist.insert(0, (pendulum.now().to_iso8601_string(), entry.password.decode(UTF8)))
             entry.pw_hist = entry.pw_hist[:PASSWORD_HISTORY_LIMIT]
             entry.password = new_pw
-
             print("   Password updated")
 
         elif choice == "4":
@@ -327,6 +326,7 @@ def entry_menu(encrypted_entries: dict[str, str], key: bytes, eid: str) -> int:
 def wipe_terminal(force=False):
     """
     Clears the terminal screen if CLEAR_SCREEN set to True.
+
     Args:
         force: Bypasses CLEAR_SCREEN.
 
@@ -338,6 +338,7 @@ def wipe_terminal(force=False):
     """
     if CLEAR_SCREEN and force == False:
         os.system('cls' if os.name == 'nt' else 'clear')
+
 
 # ==============================================================
 # MAIN
@@ -359,7 +360,7 @@ def main():
         gc.collect()
 
         if choice != "9":
-            time.sleep(.1)
+            time.sleep(.3)
             wipe_terminal()
 
         print("\n--- Main Menu ---")
@@ -445,6 +446,7 @@ def main():
             print(f"  audit_vault      - Performs an audit on all passwords contained in vault.")
             print()
             print(f"  export_json      - Exports vault in plaintext for backup.")
+            print(f"  export_csv       - Exports vault in plaintext for backup.")
             print(f"  export_portable  - Exports vault in portable mode.")
             print()
             print(f"  import_json      - Imports previously exported vault from backup.")
@@ -479,6 +481,8 @@ def main():
         # In development
         elif choice == "export_json":
             export_json()
+        elif choice == "export_csv":
+            export_csv()
 
         elif choice == "export_portable":
             export_portable()

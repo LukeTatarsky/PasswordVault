@@ -584,6 +584,113 @@ def import_csv(filepath, encrypted_entries, key):
     print(f"Imported {imported_count} entries from CSV.")
     return True
 
+def export_csv():
+    """
+    Export the vault to a decrypted csv file.
+
+    Verifies the master password, decrypts all vault entries, and writes them
+    to a plaintext csv file sorted for readability.
+
+    Returns:
+        True if entries were imported successfully.
+
+    Raises:
+        SystemExit: If master password verification fails.
+    """
+    print("\nWARNING: This will export ALL passwords and data in plain text!!!\n")
+
+    # Verify master password
+    master_pw = getpass.getpass("Confirm master password: ").encode(UTF8)
+    
+    try:
+        key, encrypted_entries, _ = load_vault(master_pw)
+        del master_pw
+    except:
+        # Lock if wrong password entered
+        logging.error(f"{pendulum.now().to_iso8601_string()} Incorrect password entered while exporting json")
+        sys.exit(0)
+
+    try:
+        # Temporary list to hold decrypted entries
+        decrypted_items = []
+        normal_fields = set()
+        normal_fields.update(["site", "account", "note", "pw_hist", "created", "edited", "password", "rec_keys", "totp", "created", "edited"])
+        # secret_fields = set()
+        # other_fields = set()
+
+        # Decrypt each entry first
+        for eid, blob in encrypted_entries.items():
+            try:
+                entry = decrypt_entry(blob, key, eid)
+                # store tuple (eid, data) for sorting later
+                decrypted_items.append((eid, entry.to_dict_export()))
+
+            except Exception as e:
+                print(f"Failed to decrypt entry {eid}: {e}")
+
+        # Sort entries by site then account (case-insensitive)
+        decrypted_items.sort(
+            key=lambda item: (
+                item[1].get("site", "").lower(),
+                item[1].get("account", "").lower(),
+                item[1].get("created", "")
+            )
+        )
+
+        normal_fields = sorted(normal_fields)
+        # secret_fields = sorted(secret_fields)
+        # other_fields = sorted(other_fields)
+        all_fields = normal_fields #+secret_fields+other_fields
+
+        # Remove the prefix before trying to access these fields later
+        # secret_fields = [f.split('.')[1] for f in secret_fields]
+        # other_fields = [f.split('.')[1] for f in other_fields]
+
+        timestamp = pendulum.now().format(DT_FORMAT_EXPORT)
+        file_name = f"password_vault_export_{timestamp}.csv"
+
+        with open(EXPORT_DIR / file_name, "w", newline="", encoding="utf-8") as f:
+
+            writer = csv.DictWriter(f, fieldnames=all_fields,extrasaction="raise")
+            writer.writeheader()
+
+            # Write sorted entries into the dict
+            for eid, data in decrypted_items:
+                row = {}
+                for field in normal_fields:
+                    x = data.get(field, "")
+                    print (x)
+                # Normal fields
+                row.update({
+                            field: data.get(field, "")
+                            for field in normal_fields
+                        })
+                # # secret _fields
+                # row.update({
+                #         f"_fields.{field}": data.get("_fields", {}).get(field, "") for field in secret_fields
+                #         })
+                # # Other fields
+                # row.update({
+                #         f"other.{field}": data.get("other", {}).get(field, "") for field in other_fields
+                #         })
+                writer.writerow(row)
+
+        # Error / Success message 
+        if len(decrypted_items) != len(encrypted_entries):
+            print (" Error Exporting all entries. Check for corrupted entries.")
+        else:
+            print (" Vault exported successfully.")
+
+        decrypted_items.clear()
+        del decrypted_items
+
+    except Exception as e:
+        msg = f"Failed to export vault: {e}"
+        print(msg)
+        logging.error(f"{pendulum.now().to_iso8601_string()} Error occured while exporting {msg}")
+        return False
+
+    return True
 def clean_val(v):
     """
     Normalize a value to a stripped string.

@@ -66,6 +66,7 @@ bitwarden_export*
 vault_export*
 vault*/
 *.lnk
+vault.json
 
 # =========================
 # Practice files

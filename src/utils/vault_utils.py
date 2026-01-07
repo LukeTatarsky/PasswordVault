@@ -337,6 +337,11 @@ def list_entries(encrypted_entries: dict[str, str], key: bytes,
 
     for eid, blob in encrypted_entries.items():
         try:
+            # data = json.loads(decrypt(blob, key, eid))
+            # site = data.get("site", "")
+            # account = data.get("account", "")
+            # note = data.get("note", "")
+            # del data
             entry = decrypt_entry(blob, key, eid)
 
             # Build searchable text
@@ -387,6 +392,40 @@ def list_entries(encrypted_entries: dict[str, str], key: bytes,
         del site, account
 
     return eid_list
+
+# def get_entry_data(entries: dict[str, str], key: bytes, eid: str) -> "Entry" | None:
+#     """
+#     Retrieve and decrypt a single vault entry.
+
+#     Looks up an encrypted entry by ID, decrypts its token,
+#     parses the resulting JSON, and returns the decrypted data.
+
+#     If the entry cannot be found, decrypted, or parsed, an empty
+#     dictionary is returned and a user-facing message is printed.
+
+#     Args:
+#         entries: Mapping of entry IDs to encrypted tokens.
+#         key: Master key used for decryption.
+#         eid: Entry ID to retrieve.
+
+#     Returns:
+#         Decrypted entry or None
+
+#     Side Effects:
+#         Offers corrupted entry deletion when detected.
+#     """
+#     entry = None
+#     try:
+#         entry = decrypt_entry(entries[eid], key, eid)
+#     except KeyError:
+#         print("Not found.")
+#     except (InvalidTag, json.JSONDecodeError, UnicodeDecodeError):
+#         print("Entry may be corrupted, cannot view.")
+#         delete_corrupted_entry(entries, key, eid)
+#     except Exception as e:
+#         print(f"Unexpected error: {e}")
+#     return entry
+
 
 def display_entry(entry: Entry, *,
     show_pass: bool = False, 
