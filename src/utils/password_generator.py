@@ -61,7 +61,7 @@ class DicewarePassphrase:
         Returns:
             Capitalized word as bytes.
         """
-        return bytearray(self._words[key].capitalize().encode(UTF8))
+        return bytearray(self._words[key].encode(UTF8))
 
     def clear(self):
         """Clear loaded wordlist."""
@@ -242,27 +242,37 @@ def ask_password(prompt: str = "Password:") -> bytearray | None:
         prompt: Prompt displayed to the user.
 
     Returns:
-        The accepted password bytearray, or None if the user chooses to quit.
+        bytearray- the entered or generated password
 
+        empty bytearray- user chose to delete the password
+
+        None- user chose to quit
+        
     Side Effects:
         Prompts for user input.
         Prints password generation options and feedback.
     """
     while True:
         print(f"\n{prompt}:")
-        print(f"  • '1' → generate random password (i.e X[hX)CqYk878pkf$l)")
-        print("  • '2' → generate random passphrase (i.e. correct-horse-battery-staple)")
-        print("\n  • Press 'Enter' → type your own")
-        print("  • Type '7' → quit")
+        print(f"  • '1' → Generate password (i.e X[hX)CqYk878pkf$l)")
+        print("  • '2' → Generate passphrase (i.e. correct-horse-battery-staple)")
+        print("  • '3' → Type your own (i.e. SecretP433w0rd)")
+        print("\n  • 'd' → Delete password")
+        print("  • 'Enter' → Quit/Skip")
         
         choice = input(" → ").strip().lower()
 
-        if choice == "":
-            pw = getpass.getpass(
-                f"Enter password (min length = {PASS_DEFAULTS['min_length']}): "
-                ).strip()
-            return bytearray(pw.encode(UTF8))
+        # Type your own
+        if choice == "3":
+            pw = bytearray(getpass.getpass(
+                f"Type password (Min length = {PASS_DEFAULTS["min_custom_length"]}): "
+                ).strip().encode(UTF8))
+            if len(pw) < PASS_DEFAULTS["min_custom_length"]:
+                print(f"  Error: Too short. Minumum allowed length is {PASS_DEFAULTS["min_custom_length"]}")
+                continue
+            return pw
 
+        # Random generation
         elif choice == "1":
             pw_len = get_int(
                 f"\n  Enter desired length (minimum {PASS_DEFAULTS["min_length"]}, "
@@ -273,7 +283,7 @@ def ask_password(prompt: str = "Password:") -> bytearray | None:
                 break
             # Check length
             if pw_len < PASS_DEFAULTS["min_length"]:
-                print(f"  Error: Too short. Minumum allowed length is {PASS_DEFAULTS["max_length"]}")
+                print(f"  Error: Too short. Minumum allowed length is {PASS_DEFAULTS["min_length"]}")
                 continue
 
             if pw_len > PASS_DEFAULTS["max_length"]:
@@ -299,8 +309,9 @@ def ask_password(prompt: str = "Password:") -> bytearray | None:
                 continue
             return pw
         
+        # Passphrase generation
         elif choice == "2":
-            diceware = DicewarePassphrase(WORD_LIST)
+            diceware = DicewarePassphrase(WORD_LIST) # type: ignore
             pw_len = get_int(
                 f"\n  Enter desired number of words. "
                 f"Press Enter for default of {PASS_DEFAULTS["phrase_len"]}: ", 
@@ -320,15 +331,18 @@ def ask_password(prompt: str = "Password:") -> bytearray | None:
             pw = bytearray()
             for i in range(pw_len):
                 word = diceware.get_word(diceware.roll_5dice())
-                word = apply_random_capitalization(word.decode(UTF8))
+                word = apply_random_capitalization(word)
                 if use_nums:
                     word = apply_random_number(word)
 
-                pw.extend(bytearray(word, UTF8))
+                pw.extend(word)
+
                 if i < pw_len-1:
                     pw.extend(PASS_DEFAULTS["phrase_sep"][randbelow_reject(
                         len(PASS_DEFAULTS["phrase_sep"]))].encode(UTF8))
+                    
                 del word
+                
                 
             print(f"\n Generated: ", end="", flush= True)
             print_bytearray(pw)
@@ -336,10 +350,12 @@ def ask_password(prompt: str = "Password:") -> bytearray | None:
                 continue
             return pw
         
-        elif choice == "7":
+        elif choice == "":
             return None
+        elif choice == "d":
+            return bytearray(b"")
         else:
-            print("Invalid — press Enter, 'g', or 'c'")
+            print("Invalid — Selection")
 
 def check_max_consecutive_bytes(pw: bytearray, threshold: int) -> bool:
     '''
@@ -370,26 +386,72 @@ def check_max_consecutive_bytes(pw: bytearray, threshold: int) -> bool:
 
     return True
 
-def apply_random_capitalization(word: str) -> str:
+def apply_random_capitalization(word: bytearray) -> bytearray:
     r = randbelow_reject(3)
-    if r == 0:
-        return word.lower()
-    elif r == 1:
-        return word.capitalize()
-    else:
-        return word.upper()
-    
-def apply_random_number(word: str) -> str:
+    for i, b in enumerate(word):
+        if 0x41 <= b <= 0x5A or 0x61 <= b <= 0x7A:
+            # Lowercase, bitwise OR with capital bit. Adds capital bit (0010 0000)
+            if r == 0:
+                word[i] = b | 0x20
+            # Capitalize, bitwise AND with compliment of capital bit. Removes capital bit
+            elif r == 1:
+                if i == 0:
+                    word[i] = b & ~0x20
+                else:
+                    word[i] = b | 0x20
+            # Uppercase
+            else:
+                word[i] = b & ~0x20
+    return word
+
+def apply_random_number(word: bytearray) -> bytearray:
     r = randbelow_reject(4)
+
     if r == 0:
         return word
-    elif r == 1:
-        return word \
-                + str(randbelow_reject(50) + randbelow_reject(50))
+
+    n = randbelow_reject(10)
+    num = int_to_ascii_ba(n)
+
+    if r == 1:
+        # word + number
+        out = bytearray(len(word) + len(num))
+        out[:len(word)] = word
+        out[len(word):] = num
+
     elif r == 2:
-        return  str(randbelow_reject(50) + randbelow_reject(50))\
-                + word
-    elif r == 3:
-        return  str(randbelow_reject(50) + randbelow_reject(50)) \
-                + word \
-                + str(randbelow_reject(50) + randbelow_reject(50))
+        # number + word
+        out = bytearray(len(word) + len(num))
+        out[:len(num)] = num
+        out[len(num):] = word
+
+    else:
+        # number + word + number
+        n2 = randbelow_reject(10)
+        num2 = int_to_ascii_ba(n2)
+
+        out = bytearray(len(num) + len(word) + len(num2))
+        i = 0
+        out[i:i+len(num)] = num
+        i += len(num)
+        out[i:i+len(word)] = word
+        i += len(word)
+        out[i:i+len(num2)] = num2
+
+    return out
+    
+def int_to_ascii_ba(n: int) -> bytearray:
+    if n == 0:
+        return bytearray(b"0")
+
+    out = bytearray()
+    while n > 0:
+        out.append(0x30 + (n % 10))  # '0' + digit
+        n //= 10
+
+    out.reverse()
+    return out
+
+def wipe_byte_arr(buf):
+    for i in range(len(buf)):
+        buf[i] = 0

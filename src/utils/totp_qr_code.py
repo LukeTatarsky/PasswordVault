@@ -51,7 +51,7 @@ def generate_otp_uri(
 
     return uri
 
-def show_totp_code(entry: Entry, interval=30) -> int:
+def show_totp_code(entry: Entry, entry_key: bytes, interval=30) -> int:
     """
     Display a live TOTP code for a vault entry.
 
@@ -70,19 +70,20 @@ def show_totp_code(entry: Entry, interval=30) -> int:
         Prints TOTP codes to stdout every second.
     """
     try:
-        totp = pyotp.TOTP(entry.totp.decode(UTF8))
-        print("Generator started. Ctrl + C to stop.\n")
-        current_code = totp.now()
-        while (True):
-            if not totp.verify(current_code):
-                current_code = totp.now()
-            remaining = interval - (int(time.time()) % interval)
-            line = f"\r One-time password code: " \
-                    f"{current_code[:len(current_code)//2]} {current_code[len(current_code)//2:]}" \
-                    f"  (refreshes in {remaining:2d}s)"
-            
-            print(line, end="", flush=True)
-            time.sleep(1)
+        with entry.get_totp(entry_key) as totp:
+            totp = pyotp.TOTP(totp.decode(UTF8))
+            print("Generator started. Ctrl + C to stop.\n")
+            current_code = totp.now()
+            while (True):
+                if not totp.verify(current_code):
+                    current_code = totp.now()
+                remaining = interval - (int(time.time()) % interval)
+                line = f"\r One-time password code: " \
+                        f"{current_code[:len(current_code)//2]} {current_code[len(current_code)//2:]}" \
+                        f"  (refreshes in {remaining:2d}s)"
+                
+                print(line, end="", flush=True)
+                time.sleep(1)
 
     except KeyboardInterrupt:
         print("\n Stopped.")
@@ -91,7 +92,7 @@ def show_totp_code(entry: Entry, interval=30) -> int:
         print(f"Error: {e}")
         return 1
 
-def show_totp_qr(entry: Entry):
+def show_totp_qr(entry: Entry, entry_key: bytes):
     """
     Display a TOTP QR code in a Tkinter window.
 
@@ -111,9 +112,10 @@ def show_totp_qr(entry: Entry):
         - QR code contains the raw TOTP secret; treat as sensitive.
         - References to image data are cleared after closing.
     """
-    uri = generate_otp_uri(secret=entry.totp.decode(UTF8), 
-                           label=entry.account.capitalize(), 
-                           issuer=entry.site.capitalize())
+    with entry.get_totp(entry_key) as totp:
+        uri = generate_otp_uri(secret=totp.decode(UTF8), 
+                            label=entry.account.capitalize() or 'No Account', 
+                            issuer=entry.site.capitalize())
     # Generate QR
     qr = qrcode.QRCode(box_size=10, border=4)
     qr.add_data(uri)
@@ -122,7 +124,7 @@ def show_totp_qr(entry: Entry):
 
     # Convert image -> PNG bytes -> base64
     buf = io.BytesIO()
-    img.save(buf, format="PNG")
+    img.save(buf, format="PNG") # type: ignore
     png_bytes = buf.getvalue()
     b64_data = base64.b64encode(png_bytes)
 
@@ -132,7 +134,7 @@ def show_totp_qr(entry: Entry):
 
     photo = tk.PhotoImage(data=b64_data)
     lbl_img = tk.Label(root, image=photo)
-    lbl_img.image = photo
+    lbl_img.image = photo # type: ignore
     lbl_img.pack(padx=20, pady=20)
 
     uri_box = tk.Text(root, height=4, width=90)
@@ -168,4 +170,4 @@ def show_totp_qr(entry: Entry):
     root.protocol("WM_DELETE_WINDOW", on_close)
 
     root.mainloop()
-    
+        

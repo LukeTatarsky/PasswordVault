@@ -8,7 +8,7 @@ import sys
 # Vault settings
 # ==============================================================
 # Software version
-VERSION = "1.4.1"
+VERSION = "2.0.0"
 
 # Name of encrypted vault file
 if getattr(sys, "frozen", False):
@@ -21,11 +21,11 @@ else:
 VAULT_DIR = BASE_DIR / "vault"
 VAULT_DIR.mkdir(exist_ok=True)
 
-EXPORT_DIR = BASE_DIR / "vault_exports"
+EXPORT_DIR = BASE_DIR / "vault_import_export"
 EXPORT_DIR.mkdir(exist_ok=True)
 
-IMPORT_DIR = BASE_DIR / "vault_imports"
-IMPORT_DIR.mkdir(exist_ok=True)
+IMPORT_DIR = BASE_DIR / "vault_import_export"
+# IMPORT_DIR.mkdir(exist_ok=True)
 
 VAULT_FILE = VAULT_DIR / "passwords.vault"
 
@@ -33,21 +33,20 @@ VAULT_FILE = VAULT_DIR / "passwords.vault"
 WORD_LIST = BASE_DIR / "src/data/large_wordlist.txt"
 
 # Canary to verify master password. Do not change once vault is created.
-KEY_CHECK_STRING = "MasterKeyValidation"
+KEY_CHECK_STRING = "MasterKeyValidationCanary"
 
 # Length of generated random salt
 SALT_LEN = 16
 
 # Argon2id parameters
-# Changing these will invalidate existing vaults. Backup plaintext first!
-ARGON_TIME = 6             # Iterations - controls CPU cost
-ARGON_MEMORY = 256 * 1024  # 256 MiB - controls RAM cost
+# Changing these will invalidate existing encrypted vaults. Backup to plaintext first
+ARGON_TIME = 4             # Controls CPU cost
+ARGON_MEMORY = 256 * 1024  # Controls RAM cost
 ARGON_PARALLELISM = 2
-ARGON_HASH_LEN = 32        # bytes - Encryption key size - DO NOT CHANGE
+ARGON_HASH_LEN = 32        # Encryption key size - DO NOT CHANGE
 
-# ChaCha20Poly1305 nonce length. DO NOT CHANGE
-NONCE_LEN = 12
-
+# ChaCha20Poly1305 nonce length. 
+NONCE_LEN = 12 # DO NOT CHANGE
 
 # ==============================================================
 # Password generation defaults
@@ -59,8 +58,8 @@ PASS_DEFAULTS = {
     "min_lower": 4,
     "min_digits": 4,
     "min_symbols": 4,
-    "min_length": 0, 
-    "max_consecutive": 3,            # Reject "aaaa", "1111", etc.
+    "min_custom_length": 1,
+    "max_consecutive": 2,            # Reject "aaaa", "1111", etc.
     "avoid_ambiguous": False,         
     "ambiguous_chars": "lI1oO08",
     "symbols_pool":   "!@#()[]|?$%^*_-+.=",
@@ -89,21 +88,21 @@ CLIPBOARD_LENGTH = 80                # Number of entries to flood
 # ==============================================================
 UTF8 = "utf-8"
 DT_FORMAT = "MMM D, YYYY hh:mm:ss A"
-DT_FORMAT_PASS_HISTORY = "MMM D, YY"
+DT_FORMAT_PASS_HISTORY = "YYYY-MM-DD"
 DT_FORMAT_EXPORT = 'YYYY_MM_DD_HH_mm_ss'
 CLEAR_SCREEN = True
 
 # ==============================================================
 # System Constants
 # ==============================================================
-# length of eid
+# Length of eid
 EID_LEN = 16
 
-# length of visible name when displaying entries
+# Length of visible name when displaying entries
 SITE_LEN = 15
 ACCOUNT_LEN = 22
 
-# separator
+# Separator
 SEP_LG= "="*50
 SEP_SM = "-"*50
 

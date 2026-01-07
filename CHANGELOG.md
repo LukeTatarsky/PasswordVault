@@ -1,20 +1,32 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+---
+
+## [2.0.0] — 2026-01-07
+### Changed
+- Introduced a hierarchical key structure for the vault.
+- Entry secrets remain encrypted at rest and are decrypted only on explicit user request.
+
+### Added
+- csv_export command that exports the vault to plaintext csv
+
+### Migration Notes
+- See [1.4.1] for required export steps prior to upgrading.
 
 ---
 
 ## [1.4.1] — 2026-01-07
 ### Changed
-- changed a few things to allow exportation of old vaults to csv. 
-
+- Updated vault handling to support exporting legacy vaults to CSV.
 
 ### Added
-- csv_export 
+- csv_export command that works for legacy vault migration.
 
 ### Migration Notes
-- Preparation to migrate to version 2.0.0. Version 2 will use a different encryption structure. Old encrypted vaults will not work.
-- export previous vault with csv_export and append "_fields." to headers (password, rec_keys, totp) before importing to version 2.
+- This release prepares for v2.0.0, which introduces a new encryption model.
+- Vaults encrypted with versions prior to 2.0.0 are not compatible.
+- Export the existing vault using csv_export and append "_fields." to sensitive headers (password, rec_keys, totp) before importing into v2.0.0.
 
 ---
 

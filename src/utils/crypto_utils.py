@@ -1,65 +1,110 @@
 import base64
-import hashlib
-import secrets
+from typing import List, Tuple, Dict
+import pendulum, json, secrets
+from cryptography.hazmat.primitives.hashes import SHA3_512
+from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
-from argon2.low_level import hash_secret_raw, Type
-from config.config_vault import *
 from utils.Entry import Entry
+from config.config_vault import *
 
-def derive_key(pw: bytes, salt: bytes) -> bytes:
-    """
-    Derive a symmetric encryption key from a password and salt using Argon2id.
 
-    Applies the Argon2id hashing function to produce a fixed-length
-    key suitable for use with encryption.
-
-    Args:
-        pw: Master password as raw bytes.
-        salt: Cryptographic salt as raw bytes.
-
-    Returns:
-        A URL-safe base64-encoded 32-byte key.
-
-    Raises:
-        ValueError: If the password or salt is invalid.
-    
-    Security:
-        - Argon2id provides resistance to brute force attacks.
-        - The derived key is kept in memory only as long as necessary.
-        - The salt is not secret but must be unique per vault.
-    """
-    key = hash_secret_raw(
-        secret=pw,
+# Argon2id KDF to derive the root key from the master password
+def derive_root_key(password: bytes, salt: bytes) -> bytes:
+    kdf = Argon2id(
         salt=salt,
-        time_cost=ARGON_TIME,
+        length=ARGON_HASH_LEN,
+        iterations=ARGON_TIME,
+        lanes=ARGON_PARALLELISM,
         memory_cost=ARGON_MEMORY,
-        parallelism=ARGON_PARALLELISM,
-        hash_len=ARGON_HASH_LEN,
-        type=Type.ID
+        )
+    return kdf.derive(password)
+
+
+# HKDF to derive keys based on input material
+def derive_key(key: bytes,*, info: bytes = b'', salt: bytes = b'', length: int = 32) -> bytes:
+    hkdf = HKDF(
+        algorithm=SHA3_512(),
+        length=length,
+        salt=salt,
+        info=info
     )
-    return key
+    return hkdf.derive(key)
 
-def pepper_pw(pw: bytes, pepper: bytes):
+def str_to_bytes(eid_str: str) -> bytes:
     """
-    Hash a password with a pepper using BLAKE2b.
+    Decode a URL-safe base64 string into bytes.
+    """
+    padding = "=" * (-len(eid_str) % 4)
+    return base64.urlsafe_b64decode(eid_str + padding)
 
+
+def encrypt_entry(entry: Entry, entry_key: bytes) -> bytes:
+    """
+    Encrypts the entire Entry object and returns a single ciphertext blob (bytes)
+    using ChaCha20-Poly1305.
+
+    - entry: Entry dataclass instance
+    - entry_key: 32-byte key derived via HKDF from vault/entry key
+    """
+    # Convert dataclass to dictionary, excluding ephemeral _fields if desired
+    # Here we include _fields because it already contains field-level ciphertext
+    entry_dict = entry.to_dict()
+
+    # Serialize to canonical JSON bytes
+    plaintext_bytes = json.dumps(entry_dict, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+    # Generate random 12-byte nonce
+    nonce = secrets.token_bytes(NONCE_LEN)
+
+    # Use entry_id as AAD to bind ciphertext to this entry
+    aad = str_to_bytes(entry.entry_id)
+
+    # Encrypt
+    aead = ChaCha20Poly1305(entry_key)
+    ciphertext = aead.encrypt(nonce, plaintext_bytes, aad)
+
+    # Prepend or return as combined blob: nonce + ciphertext
+    # (Nonce is required for decryption)
+    return nonce + ciphertext
+
+
+def decrypt_entry(cipher_blob: bytes, entry_key: bytes, entry_id: str) -> Entry:
+    """
+    Decrypts bytes produced by encrypt_entry_object and returns an Entry object.
+    
     Args:
-        pw: Password string.
-        pepper: Secret key used as pepper.
+        cipher_blob: bytes from encrypt_entry_object (nonce + ciphertext)
+        entry_key: 32-byte ChaCha20-Poly1305 key
+        entry_id: used as AAD for authentication
 
     Returns:
-        32-byte hash of password + pepper.
-
-    Security Notes:
-        - Uses keyed BLAKE2b (digest size 32).
-        - Pepper protects against rainbow table attacks.
+        Entry object
     """
-    hashed = hashlib.blake2b(
-        pw,
-        key=pepper,
-        digest_size=32
-        )
-    return hashed.digest()
+    # Split nonce and ciphertext
+    nonce = cipher_blob[:12]
+    ciphertext = cipher_blob[12:]
+
+    # Decrypt
+    aead = ChaCha20Poly1305(entry_key)
+    # e_id = entry_id.encode("utf-8")
+    plaintext_bytes = aead.decrypt(nonce, ciphertext, str_to_bytes(entry_id))
+
+    # Parse JSON
+    entry_dict = json.loads(plaintext_bytes.decode("utf-8"))
+
+    # Convert _fields base64 strings back to bytes
+    fields_bytes = {}
+    for fname, data in entry_dict["_fields"].items():
+        fields_bytes[fname] = {
+            "nonce": base64.b64decode(data["nonce"]),
+            "ciphertext": base64.b64decode(data["ciphertext"]),
+            "salt":base64.b64decode(data["salt"]),
+        }
+    entry_dict["_fields"] = fields_bytes
+
+    # Reconstruct Entry object
+    return Entry.from_dict(entry_dict)
 
 def encrypt(plaintext: str, key: bytes, eid: str) -> str:
     """
@@ -91,15 +136,15 @@ def encrypt(plaintext: str, key: bytes, eid: str) -> str:
     """
 
     aead = ChaCha20Poly1305(key)
-    nonce = secrets.token_bytes(NONCE_LEN)
+    nonce = secrets.token_bytes(12)
 
     ciphertext = aead.encrypt(
         nonce=nonce,
-        data=plaintext.encode(UTF8),
+        data=plaintext.encode('utf-8'),
         associated_data=str_to_bytes(eid)
     )
     token = nonce + ciphertext
-    return base64.urlsafe_b64encode(token).decode(UTF8)
+    return base64.urlsafe_b64encode(token).decode('utf-8')
 
 def decrypt(token: str, key: bytes, eid: str) -> str:
     """
@@ -133,101 +178,13 @@ def decrypt(token: str, key: bytes, eid: str) -> str:
 
     aead = ChaCha20Poly1305(key)
 
-    raw = base64.urlsafe_b64decode(token.encode(UTF8))
-    nonce = raw[:NONCE_LEN]
-    ciphertext = raw[NONCE_LEN:]
+    raw = base64.urlsafe_b64decode(token.encode('utf-8'))
+    nonce = raw[:12]
+    ciphertext = raw[12:]
     
     plaintext = aead.decrypt(
         nonce=nonce,
         data=ciphertext,
         associated_data=str_to_bytes(eid)
     )
-    return plaintext.decode(UTF8)
-
-def decrypt_entry(token: str, key: bytes, eid: str) -> "Entry":
-    """
-    Decrypt a vault entry token into an Entry object.
-
-    Args:
-        token: Base64-encoded encrypted entry.
-        key: Symmetric key for ChaCha20Poly1305 decryption.
-        eid: Entry ID used as associated data (AEAD).
-
-    Returns:
-        Entry object reconstructed from decrypted data.
-
-    Raises:
-        Exception if decryption fails or data is invalid.
-
-    Security Notes:
-        - Uses AEAD; ensures ciphertext integrity.
-    """
-    aead = ChaCha20Poly1305(key)
-    raw = base64.urlsafe_b64decode(token.encode(UTF8))
-    nonce = raw[:NONCE_LEN]
-    ciphertext = raw[NONCE_LEN:]
- 
-    return Entry.from_bytes(aead.decrypt(
-        nonce=nonce,
-        data=ciphertext,
-        associated_data=str_to_bytes(eid))
-    )
-
-def encrypt_entry(entry: Entry, key: bytes, eid: str) -> str:
-    """
-    Encrypt a vault entry into a base64-encoded token.
-
-    Args:
-        entry: Entry object to encrypt.
-        key: Symmetric key for ChaCha20Poly1305 encryption.
-        eid: Entry ID used as associated data (AEAD).
-
-    Returns:
-        Base64-encoded token containing nonce + ciphertext.
-
-    Security Notes:
-        - Generates a new random nonce for each encryption.
-        - Associated data protects integrity of entry ID.
-    """
-    aead = ChaCha20Poly1305(key)
-    nonce = secrets.token_bytes(NONCE_LEN)
-
-    plaintext = entry.to_bytes()
-
-    ciphertext = aead.encrypt(
-        nonce=nonce,
-        data=plaintext,
-        associated_data=str_to_bytes(eid)
-    )
-    token = nonce + ciphertext
-    return base64.urlsafe_b64encode(token).decode(UTF8)
-
-
-def str_to_bytes(eid_str: str) -> bytes:
-    """
-    Decode a URL-safe base64 string into bytes.
-
-    Args:
-        eid_str: Base64 string (may omit padding).
-
-    Returns:
-        Decoded bytes.
-
-    Raises:
-        binascii.Error if input is invalid.
-    """
-    padding = "=" * (-len(eid_str) % 4)
-    return base64.urlsafe_b64decode(eid_str + padding)
-
-
-def bytes_to_str(byt_str: bytes) -> str:
-    """
-    Encode bytes into a URL-safe base64 string without padding.
-
-    Args:
-        byt_str: Raw bytes to encode.
-
-    Returns:
-        Base64-encoded string.
-    """
-    return base64.urlsafe_b64encode(byt_str).decode("ascii").rstrip("=")
+    return plaintext.decode('utf-8')

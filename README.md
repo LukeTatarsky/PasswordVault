@@ -10,9 +10,10 @@ It was built as a personal tool to organize account information, improve passwor
 ### **Core Security**
 
 - Authenticated encryption for all vault data with integrity protection
+- Hierarchical key architecture (v2.0+)
 - Master key derived using a **memory-hard password-based key derivation function**
 - Optional **TPM-backed key sealing** (device-bound security)
-- Single-entry decryption (entries decrypted only when accessed)
+- Per-entry secret encryption — secrets remain encrypted until explicitly requested
 - Atomic file saves – never lose data on crash or power loss
 
 ### **Password Management**
@@ -25,13 +26,14 @@ It was built as a personal tool to organize account information, improve passwor
 
 ### **Two-Factor Authentication**
 
-- Secure storage of TOTP secrets
+- Secure encrypted storage of TOTP secrets
 - Built-in TOTP code generation
+- QR-code–compatible OTP URI support
 
 ### **Optional Security Auditing**
 
 - Checks all passwords for  strength, online exposure, and reuse across accounts.
-- Password strength analysis uses **zxcvbn**
+- Password strength analysis using **zxcvbn**
 - Breach exposure checks via **Have I Been Pwned** (online, with k-anonymity)
 - Detection of reused passwords
 - Severity-sorted results
@@ -42,7 +44,7 @@ It was built as a personal tool to organize account information, improve passwor
 - Plaintext JSON export for backups and migrations
 - Re-import of exported plaintext JSON backup
 - CSV import support for migrating from other password managers and browser exports
-
+- CSV export of plaintext data
 ---
 ## **TPM Mode**
 
@@ -163,7 +165,7 @@ To export a plaintext backup:
 
 **Warning:** Plaintext exports contain **unencrypted passwords** and must be protected appropriately.
 
-### **Encrypted JSON (Portable Mode)**
+### **Portable Mode (Encrypted with password)**
 
 To export in Portable Mode:
 
@@ -221,10 +223,13 @@ Steps:
 - Back up the encrypted vault regularly.
 - If TPM mode is enabled, keep **at least one Portable Mode backup**
     - Store this backup offline and separate from your device
-- Protect plaintext exports carefully
+- Maintain at least one plaintext export for disaster recovery
+    - Store securely (e.g., encrypted external media or offline storage)
 
 
 ## **Disclaimer**
+
+This project is intended for personal and educational use. Use at your own risk.
 
 This tool is as secure as your master password and your machine.
 

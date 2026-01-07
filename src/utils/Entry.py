@@ -1,32 +1,59 @@
+import secrets
+import sys
+import pendulum
+import base64
 from dataclasses import dataclass, field
-from typing import List, Tuple, Dict
-import pendulum, base64, json, sys
-from config.config_vault import UTF8
+from contextlib import contextmanager
+from typing import Dict, Iterator, List, Tuple, Any
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.hashes import SHA3_512
+from config.config_vault import SALT_LEN, NONCE_LEN
 
+
+
+# -----------------------------
+# Field crypto helpers
+# -----------------------------
+def decrypt_field(enc: Dict[str, bytes], field_key: bytes, entry_id: str, field_name: str) -> bytearray:
+    aad = f"entry:{entry_id}:field:{field_name}:v1".encode()
+    aead = ChaCha20Poly1305(field_key)
+    plaintext = aead.decrypt(enc["nonce"], enc["ciphertext"], aad)
+    return bytearray(plaintext)
+
+
+def wipe_bytes(b: bytearray):
+    for i in range(len(b)):
+        b[i] = 0
+
+# -----------------------------
+# Dataclass
+# -----------------------------
 @dataclass
 class Entry:
     """
     Represents a single vault entry.
 
-    Stores account metadata, secrets, history, and auxiliary fields
+    Stores account metadata, secrets, password history, and auxiliary fields
     associated with a site.
     """
-    # id: str 
     site: str
+    entry_id: str
+
     account: str = ''
     note: str = ''
 
-    password: bytearray = field(default_factory=bytearray)
-    rec_keys: bytearray = field(default_factory=bytearray)
-    totp: bytearray = field(default_factory=bytearray)
-
+    # Encrypted fields
+    _fields: Dict[str, Dict[str, bytes]] = field(default_factory=dict)
+    test_attr: Any = ''
     pw_hist: List[Tuple[str, str]] = field(default_factory=list)
 
-    # Used to add any other fields into the entry.
+    # Other is used to save any other fields when importing data into password vault.
     other: Dict[str, str] = field(default_factory=dict)
+    
+    # Timestamps
     created: str = field(default_factory=lambda: pendulum.now().to_iso8601_string())
     edited: str = field(default_factory=lambda: pendulum.now().to_iso8601_string())
-    
 
     def __post_init__(self): # logic after the built-in __init__ method has been called.
         """
@@ -41,7 +68,6 @@ class Entry:
         if not self.site:
             raise ValueError("Site cannot be empty")
         
-
     def __repr__(self):
         return (
             f"Entry(site={self.site}, "
@@ -51,208 +77,237 @@ class Entry:
             f"created={self.created}, "
             f"edited={self.edited})"
         )
-    
-    # def __repr__(self):
-    #     return (
-    #         f"Entry(\n"
-    #         f" site={self.site} \n"
-    #         f" account={self.account} \n"
-    #         f" pw={self.password} \n"
-    #         f" note={self.note} \n"
-    #         f" keys={self.rec_keys} \n"
-    #         f" totp={self.totp} \n"
-    #         f" pw_hist={self.pw_hist} \n"
-    #         f" other={self.other} \n"
-    #         f" url={self.url} \n"
-    #         f" created={self.created} \n"
-    #         f" edited={self.edited})"
-    #     )
-    
-    def wipe(self):
-        """
-        Wipe sensitive buffers in memory.
-
-        Overwrites password-related buffers and clears references.
-
-        Side Effects:
-            Modifies and clears secret buffers.
-        """
-        for buf in (self.password, self.rec_keys, self.totp):
-            for i in range(len(buf)):
-                buf[i] = 0
-
     def __del__(self):
         """
         Best-effort cleanup of sensitive data.
-
-        Intended as a fallback; wipe() should be called explicitly.
         """
         try:
-            self.wipe()
+            if hasattr(self, "_fields"):
+                self._fields.clear()
+                del self._fields
+            if hasattr(self, "pw_hist"):
+                self.pw_hist.clear()
+                del self.pw_hist
+            if hasattr(self, "other"):
+                self.other.clear()
+                del self.other
+            for attr in ["site", "entry_id", "account", "note", "created", "edited"]:
+                if hasattr(self, attr):
+                    setattr(self, attr, None)
         except Exception:
             # no errors in __del__ allowed
             pass
+    # -------------------
+    # Field key derivation
+    # -------------------
+    def _derive_field_key(self, entry_key: bytes, field_name: str, salt: bytes) -> bytes:
+        hkdf = HKDF(
+            algorithm=SHA3_512(),
+            length=32,
+            salt=salt,
+            info=f"field key:{field_name}".encode(),
+        )
+        return hkdf.derive(entry_key)
+
+    # -------------------
+    # Generic field access
+    # -------------------
+    # Set a field (encrypt and store)
+    def set_field(self, field_name: str, value: bytearray, entry_key: bytes, new_eid: str = ''):
+        if not isinstance(value, bytearray):
+            raise TypeError("Field value must be a bytearray")
+        salt = secrets.token_bytes(SALT_LEN)
+        field_key = self._derive_field_key(entry_key, field_name, salt)
+        nonce = secrets.token_bytes(NONCE_LEN)
+        if new_eid:
+            aad = f"entry:{new_eid}:field:{field_name}:v1".encode()
+        else:
+            aad = f"entry:{self.entry_id}:field:{field_name}:v1".encode()
+        aead = ChaCha20Poly1305(field_key)
+        ciphertext = aead.encrypt(nonce, value, aad)
+        wipe_bytes(value)
+        self._fields[field_name] = {"nonce": nonce, "ciphertext": ciphertext, "salt": salt}
+
+    # Ephemeral decrypt: yields a bytearray and wipes it automatically
+    @contextmanager
+    def get_field(self, field_name: str, entry_key: bytes) -> Iterator[bytearray]:
+        if field_name not in self._fields:
+            raise KeyError(f"Field {field_name} does not exist")
+        data = self._fields[field_name]
+        field_key = self._derive_field_key(entry_key, field_name, data["salt"])
+        decrypted = decrypt_field(self._fields[field_name], field_key, self.entry_id, field_name)
+        try:
+            yield decrypted
+        finally:
+            wipe_bytes(decrypted)
+
+    def field_exists(self, field_name: str):
+        '''
+        Checks to see if fiel_name exists in _fields
+        '''
+        if field_name not in self._fields:
+            return False
+        return True
+
+    # Convenience methods
+    def set_password(self, value: bytearray, entry_key: bytes):
+        self.set_field("password", value, entry_key)
+    
+    def rm_password(self):
+        self._fields.pop('password')
+
+    @contextmanager
+    def get_password(self, entry_key: bytes) -> Iterator[bytearray]:
+        with self.get_field("password", entry_key) as pw:
+            yield pw
+
+    def set_totp(self, value: bytearray, entry_key: bytes):
+        self.set_field("totp", value, entry_key)
+    
+    def rm_totp(self):
+        self._fields.pop('totp')
+
+    @contextmanager
+    def get_totp(self, entry_key: bytes) -> Iterator[bytearray]:
+        with self.get_field("totp", entry_key) as totp:
+            yield totp
+
+    def set_rec_keys(self, value: bytearray, entry_key: bytes):
+        self.set_field("rec_keys", value, entry_key)
+
+    def rm_rec_keys(self):
+        self._fields.pop('rec_keys')
+
+    @contextmanager
+    def get_rec_keys(self, entry_key: bytes) -> Iterator[bytearray]:
+        with self.get_field("rec_keys", entry_key) as rec_keys:
+            yield rec_keys
 
     def to_dict(self) -> dict:
         """
-        Serialize entry to a dictionary.
-
-        Encodes sensitive fields using base64 for storage.
-
-        Returns:
-            Dictionary representation of the entry.
+        Custom serialization:
+        - Converts all bytes in _fields to base64 strings
         """
+        serialized_fields = {}
+        for fname, data in self._fields.items():
+            serialized_fields[fname] = {
+                "nonce": base64.b64encode(data["nonce"]).decode("ascii"),
+                "ciphertext": base64.b64encode(data["ciphertext"]).decode("ascii"),
+                "salt": base64.b64encode(data["salt"]).decode("ascii")
+            }
+
         return {
+            "entry_id": self.entry_id,
             "site": self.site,
-            "account": self.account,
             "note": self.note,
-            "password": _btArr_to_b64(self.password),
-            "keys": _btArr_to_b64(self.rec_keys),
-            "totp": _btArr_to_b64(self.totp),
-            "password_history": [
-                (timestamp, secret)
-                for timestamp, secret in self.pw_hist
-            ],
-            "created_date": self.created,
-            "edited_date": self.edited,
-            "other": dict(self.other),
-        }
-    def to_dict_export(self) -> dict:
-        """
-        Serialize entry for plaintext export.
-
-        Decodes secret fields for external use.
-
-        Returns:
-            Exportable dictionary representation.
-
-        Security Notes:
-            - Secrets are returned in plaintext.
-            - Intended for trusted export only.
-        """
-        return {
-            "site": self.site,
             "account": self.account,
-            "note": self.note,
-            "password": self.password.decode(UTF8, errors="strict"),
-            "rec_keys": self.rec_keys.decode(UTF8, errors="strict"),
-            "totp": self.totp.decode(UTF8, errors="strict"),
-            "pw_hist": [
-                [timestamp, secret]
-                for timestamp, secret in self.pw_hist
-            ],
+            "_fields": serialized_fields,
+            "pw_hist": self.pw_hist,
+            "other": self.other,
             "created": self.created,
-            "edited": self.edited,
-            "other": dict(self.other),
+            "edited": self.edited
         }
-    
-    def to_bytes(self) -> bytes:
-        """
-        Serialize entry to compact JSON bytes.
-
-        Returns:
-            UTF-8 encoded JSON bytes.
-        """
-        return json.dumps(
-            self.to_dict(),
-            separators=(",", ":"),
-            ensure_ascii=False,
-        ).encode("utf-8")
-
-    @classmethod
-    def from_dict_export(cls, data: dict) -> "Entry":
-        """
-        Create an entry from exported plaintext data.
-
-        Args:
-            data: Exported entry data.
-
-        Returns:
-            Reconstructed Entry instance.
-        """
-        if not isinstance(data, dict):
-            raise TypeError("Entry data must be a dict")
-
-        entry = cls(
-            site=data["site"],
-            account=data.get("account", ""),
-        )
-
-        entry.note = data.get("note", "")
-        entry.password = bytearray(data.get("password", "").encode(UTF8))
-        entry.rec_keys = bytearray(data.get("keys", "").encode(UTF8))
-        entry.totp = bytearray(data.get("totp", "").encode(UTF8))
-        data["password"] = None
-        data["keys"] = None
-        data["totp"] = None
-
-        entry.pw_hist = [
-            (label, secret)
-            for label, secret in data.get("password_history", [])
-        ]
-
-        entry.created = data.get("created_date", "")
-        entry.edited = data.get("edited_date", "")
-        entry.other = dict(data.get("other", {}))
-        
-        return entry
     
     @classmethod
     def from_dict(cls, data: dict) -> "Entry":
         """
-        Create an entry from encoded storage data.
+        Reconstruct an Entry object from a dictionary produced by to_dict().
 
-        Args:
-            data: Stored entry data.
-
-        Returns:
-            Reconstructed Entry instance.
+        - Decodes base64-encoded bytes in _fields
+        - Does NOT decrypt any secret material
+        - Restores metadata verbatim
         """
-        if not isinstance(data, dict):
-            raise TypeError("Entry data must be a dict")
+        # Decode encrypted fields back into bytes
+        fields = {}
+        for fname, enc in data.get("_fields", {}).items():
+            fields[fname] = {
+                "nonce": enc["nonce"],
+                "ciphertext": enc["ciphertext"],
+                "salt": enc["salt"],
+            }
 
-        entry = cls(
+        return cls(
+            entry_id=data["entry_id"],
             site=data["site"],
             account=data.get("account", ""),
+            note=data.get("note", ""),
+            _fields=fields,
+            pw_hist=data.get("pw_hist", []),
+            other=data.get("other", {}),
+            created=data.get("created", field(default_factory=lambda: pendulum.now().to_iso8601_string())),
+            edited=data.get("edited", field(default_factory=lambda: pendulum.now().to_iso8601_string())),
         )
+    
+    def to_dict_export_plain(self, vault_key: bytes) -> dict:
+        """
+        Custom serialization for plaintext export:
+        - Converts all bytes in _fields to base64 strings
+        """
+        serialized_fields = {}
+        for fname, _ in self._fields.items():
+            with self.get_field(fname, vault_key) as fvalue:
+                serialized_fields[fname] = fvalue.decode("utf-8")
 
-        entry.note = data.get("note", "")
-        entry.password = _b64_to_btArr(data.get("password", ""))
-        entry.rec_keys = _b64_to_btArr(data.get("keys", ""))
-        entry.totp = _b64_to_btArr(data.get("totp", ""))
-        data["password"] = None
-        data["keys"] = None
-        data["totp"] = None
-
-        entry.pw_hist = [
-            (label, secret)
-            for label, secret in data.get("password_history", [])
-        ]
-
-        entry.created = data.get("created_date", "")
-        entry.edited = data.get("edited_date", "")
-        entry.other = dict(data.get("other", {}))
-        
-        return entry
+        return {
+            "site": self.site,
+            "note": self.note,
+            "account": self.account,
+            "_fields": serialized_fields,
+            "pw_hist": self.pw_hist,
+            "other": self.other,
+            "created": self.created,
+            "edited": self.edited
+        }
     
     @classmethod
-    def from_bytes(cls, raw: bytes) -> "Entry":
+    def from_dict_export_plain(cls, data: dict, entry_key: bytes, entry_id: bytes) -> "Entry":
         """
-        Deserialize an entry from JSON bytes.
-
+        Reconstruct an Entry from plaintext export dictionary and encrypt all fields.
         Args:
-            raw: UTF-8 encoded JSON bytes.
+            data: dict produced by to_dict_export_plain()
+            vault_key: 32-byte vault key used to derive field keys
 
         Returns:
-            Reconstructed Entry instance.
+            Entry object with _fields encrypted and ready for vault storage.
         """
-        if not isinstance(raw, (bytes, bytearray)):
-            raise TypeError("Input must be bytes")
 
-        data = json.loads(raw.decode("utf-8"))
-        return cls.from_dict(data)
+        entry = cls(
+            entry_id=bytes_to_str(entry_id),
+            site=data.get("site", ""),
+            account=data.get("account", ""),
+            note=data.get("note", ""),
+            _fields={},
+            pw_hist=data.get("pw_hist", []),
+            other=data.get("other", {}),
+            created=data.get("created", pendulum.now().to_iso8601_string()),
+            edited=data.get("edited", pendulum.now().to_iso8601_string())
+        )
+
+        # Encrypt each plaintext field immediately
+        for fname, plaintext_value in data.get("_fields", {}).items():
+            if isinstance(plaintext_value, str):
+                field_bytes = bytearray(plaintext_value.encode("utf-8"))
+                entry.set_field(fname, field_bytes, entry_key)
+                wipe_bytes(field_bytes)  # securely wipe temporary bytearray
+                del field_bytes
+
+        return entry
 
 
+# -----------------------------
+# Formatting Helper Functions
+# -----------------------------
+def print_bytearray(secret: bytearray):
+    """
+    Write a bytearray directly to stdout.
+
+    Side Effects:
+        Writes raw bytes to standard output.
+    """
+    mv = memoryview(secret)
+    sys.stdout.buffer.write(mv)
+    sys.stdout.buffer.write(b"\n")
+    sys.stdout.flush()
 
 def _btArr_to_b64(b: bytearray) -> str:
     """Encode a bytearray as base64."""
@@ -264,7 +319,7 @@ def _b64_to_btArr(s: str) -> bytearray:
 
 def str_to_bytes(eid_str: str) -> bytes:
     """
-    Decode a URL-safe base64 string.
+    Decode a URL-safe base64 string. Used in encryption.
 
     Args:
         eid_str: Encoded string.
@@ -287,15 +342,3 @@ def bytes_to_str(byt_str: bytes) -> str:
         Encoded string without padding.
     """
     return base64.urlsafe_b64encode(byt_str).decode("ascii").rstrip("=")
-
-def print_bytearray(secret: bytearray):
-    """
-    Write a bytearray directly to stdout.
-
-    Side Effects:
-        Writes raw bytes to standard output.
-    """
-    mv = memoryview(secret)
-    sys.stdout.buffer.write(mv)
-    sys.stdout.buffer.write(b"\n")
-    sys.stdout.flush()

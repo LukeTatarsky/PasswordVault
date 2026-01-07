@@ -6,13 +6,16 @@ import os
 import logging
 import base64
 import pendulum
+import copy
+from ast import literal_eval
+from urllib.parse import urlparse, parse_qs
 
+from dataclasses import fields
 from typing import Dict
 from cryptography.exceptions import InvalidTag
-
 from config.config_vault import *
 from utils.Entry import Entry, bytes_to_str, str_to_bytes
-from utils.crypto_utils import encrypt_entry, encrypt, decrypt_entry, decrypt, derive_key
+from utils.crypto_utils import encrypt_entry, encrypt, decrypt_entry, decrypt, derive_key, derive_root_key
 from utils.vault_utils import load_vault, save_vault
 from utils.user_input import get_int
 
@@ -26,44 +29,52 @@ logger = logging.getLogger(__name__)
 SCHEMAS = {
         "bitwarden" : {"name": "site",
                     "login_username": "account",
-                    "login_password": "password",
+                    "login_password": "_fields.password",
                     "notes": "note",
-                    "login_totp": "totp"
+                    "login_totp": "_fields.totp"
                     },
         "proton" : {"name" : "site",
                     "username": "account",
-                    "password": "password",
-                    "note": "note"
+                    "password": "_fields.password",
+                    "totp": "_fields.totp",
+                    "note": "note",
                     },
         "chrome" : {"name": "site",
                     "username": "account",
-                    "password": "password",
+                    "password": "_fields.password",
                     "note": "note",
                     },
         "firefox" : {"url": "site",
                     "username": "account",
-                    "password": "password",
+                    "password": "_fields.password",
                     },
         "opera" : {"name" : "site",
                     "username": "account",
-                    "password": "password",
+                    "password": "_fields.password",
                     "note": "note"
                     },
         "edge" : {"name" : "site",
                     "username": "account",
-                    "password": "password",
+                    "password": "_fields.password",
                     "note": "note"
                     },
-        "password_vault" : {"site" : "site",
+        "password_vault" : {
+                    "site" : "site",
                     "account": "account",
-                    "password": "password",
                     "note": "note",
-                    "totp": "totp",
-                    "rec_keys": "rec_keys",
+                    "pw_hist": "pw_hist",
+                    "created": "created",
+                    "edited": "edited",
+                    "_fields.password": "_fields.password",
+                    "_fields.rec_keys": "_fields.rec_keys",
+                    "_fields.totp": "_fields.totp",
                     },
     }
 
-# These come as integers, convert them for dates before storing.
+# These fields will not be imported during csv import
+IGNORE = ("httpRealm", "formActionOrigin", "guid", "vault", "folder", "favorite", "reprompt")
+
+# Used to format dates before storing.
 FIREFOX_TIME_FIELDS = {
     "timecreated",
     "timelastused",
@@ -73,6 +84,10 @@ PROTON_TIME_FIELDS = {
     "createtime",
     "modifytime",
 }
+TIMEMAPPING = {"timecreated": "date_created",
+               "createtime": "date_created",
+               "modifytime": "date_modified",
+               "timepasswordchanged": "date_modified"}
 
 def export_portable():
     """
@@ -94,10 +109,11 @@ def export_portable():
         master_pw = getpass.getpass("Confirm master password: ").encode(UTF8)
         
         try:
-            temp_key, temp_entries, _ = load_vault(master_pw)
+            vault_key, temp_entries, _ = load_vault(master_pw)
         except:
             # Lock if wrong password entered
             print("Incorrect password. Exiting.")
+            sys.exit(0)
             return False
 
         print(" Current password verified.")
@@ -111,14 +127,14 @@ def export_portable():
             if master_pw != confirm_pw:
                 print (" New passwords did not match. Returning to main menu.")
                 return False
+            del confirm_pw
         print(" Re-encrypting all entries...")
 
         # Derive a new key
         new_salt = secrets.token_bytes(SALT_LEN)
-
-        new_key = derive_key(master_pw, new_salt)
-        master_pw = secrets.token_bytes(len(master_pw))
-        del master_pw
+        new_root_key = derive_root_key(master_pw, salt = new_salt)
+        new_vault_key = derive_key(new_root_key, salt = new_salt)
+        del master_pw, new_root_key
 
         # Generate a new canary ID
         new_canary_id = bytes_to_str(secrets.token_bytes(EID_LEN))
@@ -129,19 +145,28 @@ def export_portable():
         for eid, old_blob in temp_entries.items():
             try:
                 # Decrypt with old key
-                entry = decrypt_entry(old_blob, temp_key, eid)
-                # Encrypt again with new key
-                new_blob = encrypt_entry(entry, new_key, eid)
-                entry.wipe()
+                old_entry_key = derive_key(vault_key, info = str_to_bytes(eid))
+                entry = decrypt_entry(str_to_bytes(old_blob), old_entry_key, eid)
+
+                # Derive new entry key
+                new_entry_key = derive_key(new_vault_key, info=str_to_bytes(eid))
+                        
+                # Re-encrypt all secret fields
+                for fname in entry._fields:
+                    # Decrypt old field value
+                    with entry.get_field(fname, old_entry_key) as fvalue:
+                        entry.set_field(fname, fvalue, new_entry_key)
+
+                new_blob = encrypt_entry(entry, new_entry_key)
                 del entry
-                new_encrypted_entries[eid] = new_blob
+                new_encrypted_entries[eid] = bytes_to_str(new_blob)
             except InvalidTag as e:
-                msg = f"Failed to decrypt entry {eid}: {e}"
+                msg = f"Failed to decrypt entry {eid} {e}"
                 print(msg)
                 logger.error(f"[{pendulum.now().to_iso8601_string()}] {msg}\n")
 
             except Exception as e:
-                msg = f"Failed to re-encrypt entry {eid}: {e}"
+                msg = f"Failed to re-encrypt entry {eid} {e}"
                 print(msg)
                 logger.error(f"[{pendulum.now().to_iso8601_string()}] {msg}\n")
         
@@ -150,17 +175,18 @@ def export_portable():
         vault = {
             "date_exported": pendulum.now().in_timezone('local').format(DT_FORMAT),
             "vault_version": VERSION,
+            "argon_params": {"time": ARGON_TIME,"lanes":ARGON_PARALLELISM, "memory":ARGON_MEMORY},
             "salt": base64.urlsafe_b64encode(new_salt).decode("ascii"),
             "canary_id": new_canary_id,
-            "canary": encrypt(KEY_CHECK_STRING, new_key, new_canary_id),
+            "canary": encrypt(KEY_CHECK_STRING, new_vault_key, new_canary_id),
             "entries": new_encrypted_entries
         }
 
-        del new_key
+        del new_vault_key
 
         # Save to file
         timestamp = pendulum.now().format(DT_FORMAT_EXPORT)
-        file_name = f"password_vault_portable_{timestamp}.vault"
+        file_name = f"passwords_portable_{timestamp}.vault"
 
 
         with open(EXPORT_DIR / file_name, "w") as f:
@@ -204,11 +230,12 @@ def export_json():
     master_pw = getpass.getpass("Confirm master password: ").encode(UTF8)
     
     try:
-        key, encrypted_entries, _ = load_vault(master_pw)
+        vault_key, encrypted_entries, _ = load_vault(master_pw)
+        del master_pw
     except:
         # Lock if wrong password entered
-        print("Incorrect password. Exiting.")
-        return False
+        logging.error(f"{pendulum.now().to_iso8601_string()} Incorrect password entered while exporting json")
+        sys.exit(0)
 
     print("Current password verified. Re-encrypting all entries...")
 
@@ -219,11 +246,11 @@ def export_json():
         # Decrypt each entry first
         for eid, blob in encrypted_entries.items():
             try:
-                entry = decrypt_entry(blob, key, eid)
+                entry_key = derive_key(vault_key, info = str_to_bytes(eid))
+                entry = decrypt_entry(str_to_bytes(blob), entry_key, eid)
                 # store tuple (eid, data) for sorting later
-                decrypted_items.append((eid, entry.to_dict_export()))
-                entry.wipe()
-                del entry
+                export_dict = copy.deepcopy(entry.to_dict_export_plain(derive_key(vault_key, info = str_to_bytes(eid))))
+                decrypted_items.append((eid, export_dict))
 
             except Exception as e:
                 print(f"Failed to decrypt entry {eid}: {e}")
@@ -232,7 +259,8 @@ def export_json():
         decrypted_items.sort(
             key=lambda item: (
                 item[1].get("site", "").lower(),
-                item[1].get("account", "").lower()
+                item[1].get("account", "").lower(),
+                item[1].get("created", "")
             )
         )
 
@@ -244,7 +272,7 @@ def export_json():
         }
 
         # Define json order.
-        json_order = ["site", "account", "password", "note", "totp", "created_date", "edited_date"]
+        json_order = ["site", "account", "note", "_fields", "pw_hist", "created", "edited"]
 
         # Write sorted entries into the dict
         for eid, data in decrypted_items:
@@ -258,9 +286,7 @@ def export_json():
                     ordered_entry[k] = v
 
             vault["entries"][eid] = ordered_entry
-            del data
-
-        
+  
         # Save to file
         timestamp = pendulum.now().format(DT_FORMAT_EXPORT)
         file_name = f"password_vault_export_{timestamp}.json"
@@ -288,7 +314,120 @@ def export_json():
 
     return True
 
-def import_json(filepath, encrypted_entries, key):
+def export_csv():
+    """
+    Export the vault to a decrypted csv file.
+
+    Verifies the master password, decrypts all vault entries, and writes them
+    to a plaintext csv file sorted for readability.
+
+    Returns:
+        True if entries were imported successfully.
+
+    Raises:
+        SystemExit: If master password verification fails.
+    """
+    print("\nWARNING: This will export ALL passwords and data in plain text!!!\n")
+
+    # Verify master password
+    master_pw = getpass.getpass("Confirm master password: ").encode(UTF8)
+    
+    try:
+        vault_key, encrypted_entries, _ = load_vault(master_pw)
+        del master_pw
+    except:
+        # Lock if wrong password entered
+        logging.error(f"{pendulum.now().to_iso8601_string()} Incorrect password entered while exporting json")
+        sys.exit(0)
+
+    try:
+        # Temporary list to hold decrypted entries
+        decrypted_items = []
+        normal_fields = set()
+        normal_fields.update(["site", "account", "note", "pw_hist", "created", "edited"])
+        secret_fields = set()
+        other_fields = set()
+
+        # Decrypt each entry first
+        for eid, blob in encrypted_entries.items():
+            try:
+                entry_key = derive_key(vault_key, info = str_to_bytes(eid))
+                entry = decrypt_entry(str_to_bytes(blob), entry_key, eid)
+                # store tuple (eid, data) for sorting later
+                export_dict = copy.deepcopy(entry.to_dict_export_plain(derive_key(vault_key, info = str_to_bytes(eid))))
+                decrypted_items.append((eid, export_dict))
+
+                
+                # Collect all possible fields since _fields and other can have custom info
+                # Adding a prefix here so we know what is supposed to be in _fields and in other
+                secret_fields.update(f"_fields.{k}" for k in entry._fields.keys())
+                other_fields.update(f"other.{k}" for k in entry.other.keys())
+
+            except Exception as e:
+                print(f"Failed to decrypt entry {eid}: {e}")
+
+        # Sort entries by site then account (case-insensitive)
+        decrypted_items.sort(
+            key=lambda item: (
+                item[1].get("site", "").lower(),
+                item[1].get("account", "").lower(),
+                item[1].get("created", "")
+            )
+        )
+
+        normal_fields = sorted(normal_fields)
+        secret_fields = sorted(secret_fields)
+        other_fields = sorted(other_fields)
+        all_fields = normal_fields+secret_fields+other_fields
+
+        # Remove the prefix before trying to access these fields later
+        secret_fields = [f.split('.')[1] for f in secret_fields]
+        other_fields = [f.split('.')[1] for f in other_fields]
+
+        timestamp = pendulum.now().format(DT_FORMAT_EXPORT)
+        file_name = f"password_vault_export_{timestamp}.csv"
+
+        with open(EXPORT_DIR / file_name, "w", newline="", encoding="utf-8") as f:
+
+            writer = csv.DictWriter(f, fieldnames=all_fields, extrasaction="raise" if DEBUG else "ignore")
+            writer.writeheader()
+
+            # Write sorted entries into the dict
+            for eid, data in decrypted_items:
+                row = {}
+                # Normal fields
+                row.update({
+                            field: data.get(field, "")
+                            for field in normal_fields
+                        })
+                # secret _fields
+                row.update({
+                        f"_fields.{field}": data.get("_fields", {}).get(field, "") for field in secret_fields
+                        })
+                # Other fields
+                row.update({
+                        f"other.{field}": data.get("other", {}).get(field, "") for field in other_fields
+                        })
+                writer.writerow(row)
+
+        # Notify if something went wrong 
+        if len(decrypted_items) != len(encrypted_entries):
+            print (" Error Exporting all entries. Check for corrupted entries.")
+        else:
+            print (" Vault exported successfully.")
+
+        decrypted_items.clear()
+        del decrypted_items
+
+    except Exception as e:
+        msg = f"Failed to export vault: {e}"
+        print(msg)
+        logging.error(f"{pendulum.now().to_iso8601_string()} Error occured while exporting {msg}")
+        return False
+
+    return True
+
+def import_json(filepath, encrypted_entries, vault_key):
     """
     Import entries from a previously exported plaintext JSON file.
 
@@ -323,39 +462,40 @@ def import_json(filepath, encrypted_entries, key):
         imported_count = 0
 
         # Loop plaintext entries
-        for _, entry_obj in vault.get("entries", {}).items(): #TODO check for duplicates, use dates + manual verificaiton to decide which to keep.
-
-            # Convert entry dict -> JSON plaintext string
-            entry = Entry.from_dict_export(entry_obj)
+        for _, entry_obj in vault.get("entries", {}).items(): #TODO check for duplicates, use dates + manual verification to decide which to keep.
 
             # Generate a new unique ID
-            eid = bytes_to_str(secrets.token_bytes(EID_LEN))
+            eid = secrets.token_bytes(EID_LEN)
             while eid in encrypted_entries:
-                eid = bytes_to_str(secrets.token_bytes(EID_LEN))
+                eid = secrets.token_bytes(EID_LEN)
+
+            # Convert entry dict -> JSON plaintext string
+            entry_key = derive_key(vault_key, info = eid)
+            entry = Entry.from_dict_export_plain(entry_obj, entry_key, eid)
+
             
             # Encrypt with *current* master key
-            encrypted_blob = encrypt_entry(entry, key, eid)
-            entry.wipe()
+            encrypted_blob = bytes_to_str(encrypt_entry(entry, entry_key=entry_key))
             del entry
             
             # Append into current vault
-            encrypted_entries[eid] = encrypted_blob
+            encrypted_entries[bytes_to_str(eid)] = encrypted_blob
             imported_count += 1
             del entry_obj
 
-        save_vault(encrypted_entries, key)
+        save_vault(encrypted_entries, vault_key)
         print(f"Imported {imported_count} entries from JSON.")
         
     except Exception as e:
         msg = f"Failed to export vault: {e}"
         print(msg)
         logging.error(f"{pendulum.now().to_iso8601_string()} Error occured while exporting {msg}")
-        sys.exit(1)
+        sys.exit(0)
         return False
 
     return True
 
-def import_portable(filepath, encrypted_entries, key):
+def import_portable(filepath, encrypted_entries, vault_key):
     """
     Import entries from a portable (non-TPM) vault file.
 
@@ -387,13 +527,15 @@ def import_portable(filepath, encrypted_entries, key):
 
         # Verify master password
         vault_pw = getpass.getpass("Enter Vault Password: ").encode(UTF8)
-        vault_salt = str_to_bytes(vault.get("salt", ""))
-        vault_key = derive_key(vault_pw, vault_salt)
-        del vault_pw
+        portable_vault_salt = str_to_bytes(vault.get("salt", ""))
+
+        portable_root_key = derive_root_key(vault_pw, portable_vault_salt)
+        portable_vault_key = derive_key(portable_root_key, salt = portable_vault_salt)
+        del portable_root_key, vault_pw
 
         try:
             canary_id = vault["canary_id"]
-            decrypted_canary = decrypt(vault["canary"], vault_key, canary_id)
+            decrypted_canary = decrypt(vault["canary"], portable_vault_key, canary_id)
 
             if decrypted_canary != KEY_CHECK_STRING:
                 msg = "Wrong master password!"
@@ -410,19 +552,30 @@ def import_portable(filepath, encrypted_entries, key):
         # load entries
         for old_eid, blob in vault.get("entries", {}).items():
             try:
-                entry = decrypt_entry(blob, vault_key, old_eid)
+                old_entry_key = derive_key(portable_vault_key, info = str_to_bytes(old_eid))
+                entry = decrypt_entry(str_to_bytes(blob), old_entry_key, old_eid)
 
-                # Generate a new unique ID
-                new_eid = secrets.token_bytes(EID_LEN)
-                while new_eid in encrypted_entries:
-                    new_eid = secrets.token_bytes(EID_LEN)
-
-                # Convert eid bytes to string
-                new_eid = bytes_to_str(new_eid)
+                # Generate a new unique ID (as bytes, then convert to string)
+                new_eid_bytes = secrets.token_bytes(EID_LEN)
+                while bytes_to_str(new_eid_bytes) in encrypted_entries:
+                    new_eid_bytes = secrets.token_bytes(EID_LEN)
                 
-                # Encrypt with *current* master key
-                encrypted_blob = encrypt_entry(entry, key, new_eid)
-                entry.wipe()
+                new_eid = bytes_to_str(new_eid_bytes)
+
+                # Derive new entry key from new vault key and encrypt with the new eid
+                new_entry_key = derive_key(vault_key, info=new_eid_bytes)
+
+                # Re-encrypt all secret fields
+                for fname in entry._fields:
+                    # Decrypt old field value
+                    with entry.get_field(fname, old_entry_key) as fvalue:
+                        entry.set_field(fname, fvalue, new_entry_key, new_eid)
+
+                # Set the new eid before reencrypting
+                entry.entry_id = new_eid
+
+                # Encrypt with current master key
+                encrypted_blob = bytes_to_str(encrypt_entry(entry, new_entry_key))
                 del entry
 
                 # Append into current vault
@@ -432,11 +585,11 @@ def import_portable(filepath, encrypted_entries, key):
                 print(f" Error: entry {old_eid} corrupted")
 
 
-        save_vault(encrypted_entries, key)
+        save_vault(encrypted_entries, vault_key)
         print(f"Imported {imported_count} entries from JSON.")
 
     except Exception as e:
-        print(f"Failed to import exported JSON: {e}")
+        print(f"Failed to import portable vault: {e}")
         logger.error(f"[{pendulum.now().to_iso8601_string()}] {e}\n")
         return False
     finally:
@@ -444,7 +597,7 @@ def import_portable(filepath, encrypted_entries, key):
 
     return True
     
-def import_csv(filepath, encrypted_entries, key):
+def import_csv(filepath, encrypted_entries, vault_key):
     """
     Import vault entries from a CSV file.
 
@@ -478,14 +631,16 @@ def import_csv(filepath, encrypted_entries, key):
         csv_reader = csv.DictReader(f, delimiter=delimiter)
         imported_count = 0
 
-        vault_attributes = vars(Entry("temp"))
-        clean_fields = [f.strip() for f in csv_reader.fieldnames]
+        vault_attributes = vars(Entry("temp_site", 'temp_id'))
+        clean_fields = [f.strip() for f in csv_reader.fieldnames] # type: ignore
 
         # Try to match schema to one of the presets.
         schema_name = detect_schema(set(clean_fields))
-
-        # Ask user to confirm
-        ask = input(f"\n Detected [{schema_name.capitalize()}] file. Is this correct? (y/n): ").strip()
+        if schema_name is None:
+            ask = 'n'
+        else:
+            # Ask user to confirm
+            ask = input(f"\n Detected [{schema_name}] file. Is this correct? (y/n): ").strip()
 
         # If its not correct, select the correct one manually.
         if ask == 'n':
@@ -497,44 +652,76 @@ def import_csv(filepath, encrypted_entries, key):
             if c is None:
                 return
             schema_name = schema_list[c]
+
+        if schema_name is None: # FIXME  temporary workaround
+            msg = f"Error while importing csv. Issue with schema name."
+            logging.error(msg)
+            return
         
-        schema = SCHEMAS.get(schema_name, {})
+        schema = SCHEMAS.get(schema_name)
+        
+        if schema is None: # FIXME  temporary workaround
+            msg = f"Error while importing csv. Issue with schema."
+            logging.error(msg)
+            return
+        
+        # Get a list of Entry attributes/fields
+        vault_attributes = [f.name for f in fields(Entry)]
 
         for row in csv_reader:
-            entry = Entry("temp_import_site")
-            
+            # Generate unique entry ID
+            eid = secrets.token_bytes(EID_LEN)
+            while eid in encrypted_entries:
+                eid = secrets.token_bytes(EID_LEN)
+
+            entry = Entry("temp_import_site", bytes_to_str(eid))
+            entry_key = derive_key(vault_key, info = eid)
+
             clean_row = {f.strip().lower(): clean_val(v) for f, v in row.items()}
 
             for csv_field, value in clean_row.items():
-                # values can be none
-                if not value:
+                # ignore values that are none or empty
+                if not value or value == "[]": # FIXME do not export empty pw_hist
                     continue
 
                 value = normalize_newlines(clean_row.get(csv_field, ""))
-
-                # Entry has this field
-                if csv_field in vault_attributes:
-                    # convert to byte array if required
-                    if isinstance(vault_attributes.get(csv_field),bytearray):
-                        setattr(entry, csv_field, bytearray(value, UTF8))
-                    else:
-                        setattr(entry, csv_field, value)
-                
-                # else if we have a schema mapping, use that
-                elif csv_field in schema:
+                # get a mapping if it exists
+                if csv_field in schema.keys():
                     csv_field = schema[csv_field]
-                    # convert to byte array if required
-                    if isinstance(vault_attributes.get(csv_field),bytearray):
-                        setattr(entry, csv_field, bytearray(value, UTF8))
-                    else:
-                        setattr(entry, csv_field, value)
+
+                # If csv_field has a '.' it is most likely one of our nested dicts. _fields or other
+                if "." in csv_field:
+                    dict_name, field_name = csv_field.split(".", 1)
+                    
+                    # Enforce that dname exists in Entry
+                    if dict_name in vault_attributes:
+                        # Update one of the Entry dicts
+                        if dict_name == "_fields":
+                            # If the totp is in full url format, extract the secret
+                            if field_name == "totp" and "otpauth" in value:
+                                value = extract_secret(value)
+                            # _fields values get encrypted
+                            entry.set_field(field_name, bytearray(value, UTF8), entry_key)
+                        elif dict_name == "other":
+                            # other values are plaintext
+                            entry.other[field_name] = value
+
+                # This field already belongs to Entry        
+                elif csv_field in vault_attributes:
+                    if csv_field == "pw_hist":
+                        # Convert list from string to python list
+                        value = literal_eval(value)
+                    setattr(entry, csv_field, value)
                 
                 # store anything else in "other"
                 else:
+                    # Skip these
+                    if csv_field in IGNORE:
+                        continue
                     # convert the firefox timestamps to pendulum date string.
                     if schema_name == "firefox" and csv_field in FIREFOX_TIME_FIELDS:
                         firefox_process_timestamp(entry, clean_row, csv_field)
-                    
+
                     # convert the proton pass timestamps to pendulum date string.
                     elif schema_name == "proton" and csv_field in PROTON_TIME_FIELDS:
                         proton_process_timestamp(entry, clean_row, csv_field)
@@ -557,140 +744,41 @@ def import_csv(filepath, encrypted_entries, key):
             entry.site = entry.site.removeprefix("https://")
             entry.site = entry.site.removeprefix("www.")
 
-            entry.other["imported_from"] = filepath
-
-            # Generate unique entry ID
-            eid = secrets.token_bytes(EID_LEN)
-            while eid in encrypted_entries:
-                eid = secrets.token_bytes(EID_LEN)
-
-            # Convert eid bytes to string
-            eid = bytes_to_str(eid)
+            entry.other["imported_from"] = schema_name
 
             # Encrypt using master key
             if entry.site == "temp_import_site":
                 msg = f"Error occured while importing data from {filepath}."\
                     f"Please check for correct field mapping."
                 logging.error(msg)
-            encrypted_blob = encrypt_entry(entry, key, eid)
-            entry.wipe()
+            entry_key = derive_key(vault_key, info = eid)
+            encrypted_blob = bytes_to_str(encrypt_entry(entry, entry_key))
             del entry
             
             # Save into vault
-            encrypted_entries[eid] = encrypted_blob
+            encrypted_entries[bytes_to_str(eid)] = encrypted_blob
             imported_count += 1
 
-    save_vault(encrypted_entries, key)
+    save_vault(encrypted_entries, vault_key)
     print(f"Imported {imported_count} entries from CSV.")
     return True
 
-def export_csv():
+def extract_secret(uri: str) -> str:
     """
-    Export the vault to a decrypted csv file.
-
-    Verifies the master password, decrypts all vault entries, and writes them
-    to a plaintext csv file sorted for readability.
-
-    Returns:
-        True if entries were imported successfully.
-
-    Raises:
-        SystemExit: If master password verification fails.
+    Some totp's are exported in full url format. 
+    This extracts the actual key.
     """
-    print("\nWARNING: This will export ALL passwords and data in plain text!!!\n")
+    # Parse the URL
+    parsed = urlparse(uri)
 
-    # Verify master password
-    master_pw = getpass.getpass("Confirm master password: ").encode(UTF8)
-    
-    try:
-        key, encrypted_entries, _ = load_vault(master_pw)
-        del master_pw
-    except:
-        # Lock if wrong password entered
-        logging.error(f"{pendulum.now().to_iso8601_string()} Incorrect password entered while exporting json")
-        sys.exit(0)
+    # Extract query parameters
+    params = parse_qs(parsed.query)
 
-    try:
-        # Temporary list to hold decrypted entries
-        decrypted_items = []
-        normal_fields = set()
-        normal_fields.update(["site", "account", "note", "pw_hist", "created", "edited", "password", "rec_keys", "totp", "created", "edited"])
-        # secret_fields = set()
-        # other_fields = set()
+    # Get the secret
+    secret = params.get("secret", uri)[0]
 
-        # Decrypt each entry first
-        for eid, blob in encrypted_entries.items():
-            try:
-                entry = decrypt_entry(blob, key, eid)
-                # store tuple (eid, data) for sorting later
-                decrypted_items.append((eid, entry.to_dict_export()))
+    return secret
 
-            except Exception as e:
-                print(f"Failed to decrypt entry {eid}: {e}")
-
-        # Sort entries by site then account (case-insensitive)
-        decrypted_items.sort(
-            key=lambda item: (
-                item[1].get("site", "").lower(),
-                item[1].get("account", "").lower(),
-                item[1].get("created", "")
-            )
-        )
-
-        normal_fields = sorted(normal_fields)
-        # secret_fields = sorted(secret_fields)
-        # other_fields = sorted(other_fields)
-        all_fields = normal_fields #+secret_fields+other_fields
-
-        # Remove the prefix before trying to access these fields later
-        # secret_fields = [f.split('.')[1] for f in secret_fields]
-        # other_fields = [f.split('.')[1] for f in other_fields]
-
-        timestamp = pendulum.now().format(DT_FORMAT_EXPORT)
-        file_name = f"password_vault_export_{timestamp}.csv"
-
-        with open(EXPORT_DIR / file_name, "w", newline="", encoding="utf-8") as f:
-
-            writer = csv.DictWriter(f, fieldnames=all_fields,extrasaction="raise")
-            writer.writeheader()
-
-            # Write sorted entries into the dict
-            for eid, data in decrypted_items:
-                row = {}
-                for field in normal_fields:
-                    x = data.get(field, "")
-                    print (x)
-                # Normal fields
-                row.update({
-                            field: data.get(field, "")
-                            for field in normal_fields
-                        })
-                # # secret _fields
-                # row.update({
-                #         f"_fields.{field}": data.get("_fields", {}).get(field, "") for field in secret_fields
-                #         })
-                # # Other fields
-                # row.update({
-                #         f"other.{field}": data.get("other", {}).get(field, "") for field in other_fields
-                #         })
-                writer.writerow(row)
-
-        # Error / Success message 
-        if len(decrypted_items) != len(encrypted_entries):
-            print (" Error Exporting all entries. Check for corrupted entries.")
-        else:
-            print (" Vault exported successfully.")
-
-        decrypted_items.clear()
-        del decrypted_items
-
-    except Exception as e:
-        msg = f"Failed to export vault: {e}"
-        print(msg)
-        logging.error(f"{pendulum.now().to_iso8601_string()} Error occured while exporting {msg}")
-        return False
-
-    return True
 def clean_val(v):
     """
     Normalize a value to a stripped string.
@@ -760,10 +848,11 @@ def firefox_process_timestamp(entry: Entry, row: dict[str, str], field: str) -> 
     """
     ts = row.get(field)
     if ts and ts.isdigit():
-        entry.other[field] = (
-            pendulum.from_timestamp(int(ts) // 1000)
-            .to_date_string()
-        )
+        ts = pendulum.from_timestamp(int(ts) // 1000).to_date_string()
+        if field in TIMEMAPPING:
+            entry.other[TIMEMAPPING.get(field,'')] = ts
+        else:
+            entry.other[field] = ts
     return
 
 def proton_process_timestamp(entry: Entry, row: dict[str, str], field: str) -> None:
@@ -783,8 +872,9 @@ def proton_process_timestamp(entry: Entry, row: dict[str, str], field: str) -> N
     """
     ts = row.get(field)
     if ts and ts.isdigit():
-        entry.other[field] = (
-            pendulum.from_timestamp(int(ts))
-            .to_date_string()
-        )
+        ts = pendulum.from_timestamp(int(ts)).to_date_string()
+        if field in TIMEMAPPING:
+            entry.other[TIMEMAPPING.get(field,'')] = ts
+        else:
+            entry.other[field] = ts
     return
