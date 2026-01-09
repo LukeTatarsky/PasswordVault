@@ -5,8 +5,10 @@ import base64
 import io
 import pyotp
 import time
+import logging
 from utils.Entry import Entry
 from config.config_vault import UTF8
+from utils.clipboard_utils import copy_to_clipboard
 
 def generate_otp_uri(
     secret,
@@ -72,24 +74,29 @@ def show_totp_code(entry: Entry, entry_key: bytes, interval=30) -> int:
     try:
         with entry.get_totp(entry_key) as totp:
             totp = pyotp.TOTP(totp.decode(UTF8))
-            print("Generator started. Ctrl + C to stop.\n")
-            current_code = totp.now()
-            while (True):
-                if not totp.verify(current_code):
-                    current_code = totp.now()
-                remaining = interval - (int(time.time()) % interval)
-                line = f"\r One-time password code: " \
-                        f"{current_code[:len(current_code)//2]} {current_code[len(current_code)//2:]}" \
-                        f"  (refreshes in {remaining:2d}s)"
-                
-                print(line, end="", flush=True)
-                time.sleep(1)
+        print("Generator started. Ctrl + C to stop. \nCode is copied to clipboard\n")
+        current_code = totp.now()
+        copy_to_clipboard(current_code, timeout=0, prompt= False)
+        while (True):
+            if not totp.verify(current_code):
+                current_code = totp.now()
+                copy_to_clipboard(current_code, timeout=0, prompt= False)
+            remaining = interval - (int(time.time()) % interval)
+            line = f"\r One-time password code: " \
+                    f"{current_code[:len(current_code)//2]} {current_code[len(current_code)//2:]}" \
+                    f"  (refreshes in {remaining:2d}s)"
+            
+            print(line, end="", flush=True)
+            time.sleep(1)
 
     except KeyboardInterrupt:
         print("\n Stopped.")
+        copy_to_clipboard("", timeout=0, prompt= False)
         return 0
     except Exception as e:
         print(f"Error: {e}")
+        logging.error(e)
+        copy_to_clipboard("", timeout=0, prompt= False)
         return 1
 
 def show_totp_qr(entry: Entry, entry_key: bytes):

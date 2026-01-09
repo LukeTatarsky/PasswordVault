@@ -3,6 +3,15 @@
 All notable changes to this project will be documented in this file.
 ---
 
+## [2.0.1] — 2026-01-08
+### Changed
+- TOTP code generator now automatically copies the code to clipboard.
+
+### Added
+- Created an improved password stregth tester that combines heuristic analysis, zxcvbn and post quantum stregth analysis.
+
+---
+
 ## [2.0.0] — 2026-01-07
 ### Changed
 - Introduced a hierarchical key structure for the vault.

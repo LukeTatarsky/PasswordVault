@@ -49,9 +49,10 @@ def copy_to_clipboard(text: str | bytearray,
         pyperclip.copy(text)
     elif isinstance(text, bytearray):
         pyperclip.copy(text.decode(UTF8))
-
-    text = " Copied!" + (f" (auto-clears in {timeout}s)" if timeout > 0 else "")
-    print(text, flush=True)
+        
+    if prompt:
+        text = " Copied!" + (f" (auto-clears in {timeout}s)" if timeout > 0 else "")
+        print(text, flush=True)
 
     if timeout <= 0:
         return

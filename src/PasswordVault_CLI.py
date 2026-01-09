@@ -11,36 +11,24 @@ import atexit
 import secrets
 import gc
 import logging
-import getpass
 
 # ==============================================================
 # Other imports
 # ==============================================================
 from config.config_vault import *
 from config.logging_config import setup_logging
-from utils.Entry import Entry, bytes_to_str, str_to_bytes, wipe_bytes, print_bytearray
-from utils.crypto_utils import decrypt_entry, encrypt_entry, derive_key
-from utils.clipboard_utils import copy_to_clipboard, clear_clipboard_history
-from utils.vault_utils import load_vault, save_vault, list_entries, display_entry, change_master_password
-from utils.user_input import get_note_from_user, get_int, get_keys_from_user, get_totp_from_user
-from utils.password_generator import ask_password
-from utils.totp_qr_code import show_totp_code, show_totp_qr
-from utils.password_utils import audit_entry, audit_vault
-from utils.import_export import export_json, export_portable, import_json, import_portable, import_csv, export_csv
 
 try:
     import pendulum
-
-
-    # from utils.vault_utils import display_entry, save_vault, load_vault, list_entries, change_master_password
-    
-    # from utils.password_generator import ask_password
-    # from utils.user_input import get_note_from_user, get_int
-    # from utils.clipboard_utils import copy_to_clipboard, clear_clipboard_history
-    # from utils.totp_qr_code import show_totp_code, show_totp_qr
-    # from utils.password_utils import audit_entry, audit_vault
-    # from utils.import_export import import_csv, import_json, import_portable, export_json, export_portable
-
+    from utils.Entry import Entry, bytes_to_str, str_to_bytes, wipe_bytes, print_bytearray
+    from utils.crypto_utils import decrypt_entry, encrypt_entry, derive_key
+    from utils.clipboard_utils import copy_to_clipboard, clear_clipboard_history
+    from utils.vault_utils import load_vault, save_vault, list_entries, display_entry, change_master_password
+    from utils.user_input import get_note_from_user, get_int, get_keys_from_user, get_totp_from_user
+    from utils.password_generator import ask_password
+    from utils.totp_qr_code import show_totp_code, show_totp_qr
+    from utils.password_utils import audit_entry, audit_vault
+    from utils.import_export import export_json, export_portable, import_json, import_portable, import_csv, export_csv
     
 except ImportError as e:
     missing_package = e.name if hasattr(e, "name") else "unknown package"
@@ -534,7 +522,7 @@ def main():
             audit_vault(encrypted_entries, vault_key,
                          test_exposure=t_exposure, 
                          test_strength=t_strength, 
-                         test_reuse=t_reuse)
+                         test_reuse=t_reuse, strength_threshold=101)
 
         # == IMPORT/EXPORT ===================================
         elif choice == "export_json":

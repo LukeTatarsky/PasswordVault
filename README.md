@@ -33,7 +33,7 @@ It was built as a personal tool to organize account information, improve passwor
 ### **Optional Security Auditing**
 
 - Checks all passwords for  strength, online exposure, and reuse across accounts.
-- Password strength analysis using **zxcvbn**
+- Password strength analysis using a combination of heuristics + zxcvbn + post-quantum bonus, with strong penalties for weak or deceptive passwords.
 - Breach exposure checks via **Have I Been Pwned** (online, with k-anonymity)
 - Detection of reused passwords
 - Severity-sorted results
