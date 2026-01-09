@@ -108,6 +108,30 @@ Portable vaults:
 Keep **at least one portable backup** if TPM mode is enabled.
 
 ---
+## Password Strength Analysis
+The vault now includes an advanced password strength tester that goes beyond simple length and character checks. It combines heuristic rules, entropy estimation, and post-quantum considerations to provide a more realistic assessment of password security.
+
+Scores > 90% indicate passwords whose strength is slightly boosted by the post-quantum entropy bonus.
+
+Scores ≥ 95% indicate passwords whose strength meaningfully benefits from the post-quantum entropy bonus.
+
+### Interpreting the Score
+| Score (%)      | Verdict                |
+|----------------|------------------------|
+| [0, 20)        | Unacceptable           |
+| [20, 30)       | Extremely Weak         |
+| [30, 40)       | Very Weak              |
+| [40, 50)       | Weak                   |
+| [50, 60)       | Acceptable             |
+| [60, 70)       | Decent                 |
+| [70, 80)       | Strong                 |
+| [80, 90)       | Pretty Strong          |
+| [90, 90.5)     | Very Strong            |
+| [90.5, 91)     | Super Strong           |
+| [91, 95)       | Exceptional            |
+| [95, 100)      | Extraordinary          |
+| 100      | Post-Quantum Resistant |
+
 ## **Installation**
 
 ```bash

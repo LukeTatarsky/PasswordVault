@@ -510,7 +510,7 @@ def strength_analysis(e: Entry, vault_key: bytes, *,
         verdict = "Strong"
     elif final_score < 90:
         verdict = "Pretty Strong"
-    elif final_score < 90.1:
+    elif final_score < 90.5:
         verdict = "Very Strong"
     elif final_score < 91:
         verdict = "Super Strong"
