@@ -50,41 +50,40 @@ It was built as a personal tool to organize account information, improve passwor
 # Screenshots
 <b>Entry list and search</b>
 <p>
-  <img src="screenshots/list_entries.png" alt="" style="width:30%; height:30%;">
-  <img src="screenshots/search.png" alt="" style="width:32%; height:30%;">
+  <img src="screenshots/list_entries.png" alt="" style="width:40%; height:40%;">
+  <img src="screenshots/search.png" alt="" style="width:42%; height:40%;">
 </p>
 <b>Entry information display</b>
 <p>
-  <img src="screenshots/display_main.png" alt="" style="width:34%; height:3%;">
-  <img src="screenshots/display_all.png" alt="" style="width:30%; height:30%;">
+  <img src="screenshots/display_main.png" alt="" style="width:44%; height:3%;">
+  <img src="screenshots/display_all.png" alt="" style="width:40%; height:30%;">
 </p>
 <b>Password Generation</b>
 <p>
-  <img src="screenshots/pass_menu.png" alt="" style="width:35%; height:30%;">
-  <img src="screenshots/pass_random.png" alt="" style="width:30%; height:30%;">
-  <img src="screenshots/pass_phrase.png" alt="" style="width:30%; height:30%;">
+  <img src="screenshots/pass_random.png" alt="" style="width:44%; height:30%;">
+  <img src="screenshots/pass_phrase.png" alt="" style="width:44%; height:30%;">
 </p>
 <b>2FA code generation and adding code to other authenticator app</b>
 <p>
-  <img src="screenshots/totp_code.png" alt="" style="width:34%; height:30%;">
-  <img src="screenshots/qr_for_app.png" alt="" style="width:20%; height:20%;">
+  <img src="screenshots/totp_code.png" alt="" style="width:44%; height:30%;">
+  <img src="screenshots/qr_for_app.png" alt="" style="width:26%; height:20%;">
 </p>
 <b>Password strength test, exposure check, and reuse check</b>
 <p>
-  <img src="screenshots/audit_entry_weak.png" alt="" style="width:40%; height:30%;">
-  <img src="screenshots/audit_entry_strong.png" alt="" style="width:30%; height:30%;">
+  <img src="screenshots/audit_entry_weak.png" alt="" style="width:55%; height:30%;">
+  <img src="screenshots/audit_entry_strong.png" alt="" style="width:41%; height:30%;">
 </p>
 <b>Audit of all vault passwords</b>
 <p>
-    <img src="screenshots/audit_vault.png" alt="" style="width:50%; height:40%;">
+    <img src="screenshots/audit_vault.png" alt="" style="width:60%; height:40%;">
 </p>
 <b>Other options</b>
 <p>
-  <img src="screenshots/other_options.png" alt="" style="width:50%; height:30%;">
+  <img src="screenshots/other_options.png" alt="" style="width:60%; height:30%;">
 </p>
 <b>Encrypted vault file</b>
 <p>
-  <img src="screenshots/vault_file.png" alt="" style="width:60%; height:40%;">
+  <img src="screenshots/vault_file.png" alt="" style="width:80%; height:40%;">
 </p>
 
 
