@@ -428,6 +428,7 @@ def strength_analysis(e: Entry, vault_key: bytes, *,
 
     # Cut long passwords
     max_zx_len = 100
+    real_pwd_len = len(pwd)
     if len(pwd) > max_zx_len:
         pwd = pwd[:max_zx_len]
     
@@ -436,13 +437,18 @@ def strength_analysis(e: Entry, vault_key: bytes, *,
 
     # Run the test on both compressed and not compressed passwords
     zx_results1 = zxcvbn(password=pwd, max_length=max_zx_len)
-    zx_results2 = zxcvbn(password=pw_compressed, max_length=max_zx_len)
 
-    # Take the lowest score results
-    if zx_results1["score"] <= zx_results2["score"]:
-        zx_results = zx_results1
+    if pw_compressed:
+        zx_results2 = zxcvbn(password=pw_compressed, max_length=max_zx_len)
+
+        # Take the lowest score results
+        if zx_results1["score"] <= zx_results2["score"]:
+            zx_results = zx_results1
+        else:
+            zx_results = zx_results2
+
     else:
-        zx_results = zx_results2
+        zx_results = zx_results1
 
     zxcvbn_score = zx_results["score"]
     crack_time = zx_results["crack_times_display"]["offline_fast_hashing_1e10_per_second"]
@@ -474,7 +480,6 @@ def strength_analysis(e: Entry, vault_key: bytes, *,
     heuristic_score1 = heuristic_analysis(pwd=pwd)
     heuristic_score2 = heuristic_analysis(pwd=pw_compressed)
     pw_len = len(pwd)
-    del pwd, pw_compressed
 
     # Take the lowest
     heuristic_score = min(heuristic_score1, heuristic_score2)
@@ -490,8 +495,14 @@ def strength_analysis(e: Entry, vault_key: bytes, *,
         quantum_score * 0.10
         ),2)
     
-    # Debugging
-    # print(f"{zxcvbn_score},{round(heuristic_score, 0):3},{round(quantum_score, 0):3},{final_score},{e.account},{pwd},{zx_results["crack_times_seconds"]["offline_fast_hashing_1e10_per_second"]} ")
+    # Debugging TESTING
+    msg = f"{zxcvbn_score},{round(heuristic_score, 0):3},{round(quantum_score, 0):3},{final_score},{e.site},{e.account},{pwd},{zx_results["crack_times_seconds"]["offline_fast_hashing_1e10_per_second"]} "
+    with open("output_file.csv", 'a', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(msg.split(','))
+
+
+    del pwd, pw_compressed
 
     # Define the score
     if final_score < 20:
@@ -531,7 +542,9 @@ def strength_analysis(e: Entry, vault_key: bytes, *,
         print(f"Quantum Score: {round(quantum_score,0)}%")
         print(f"Crack Time (fast hash 1e10): {crack_time}")
         print(f"Post Quantum log10 Guesses: {round(log10_guesses/2,1)}")
-        print(f"PW Length: {pw_len}")
+        print(f"PW Length: {real_pwd_len}")
+        if pw_len < real_pwd_len:
+            print(f" note: only tested first {pw_len} chars")
         if warnings:
             print(f"Warnings: {warnings}")
         if suggestions:
@@ -612,6 +625,13 @@ def audit_vault(encrypted_entries, vault_key: bytes,
     default_strength = -1
     default_exposures = 0
     default_reused = 0
+
+        # TESTING
+    # msg = f"{zxcvbn_score},{round(heuristic_score, 0):3},{round(quantum_score, 0):3},{final_score},{e.account},{pwd},{zx_results["crack_times_seconds"]["offline_fast_hashing_1e10_per_second"]} "
+
+    with open("output_file.csv", 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["zxcvbn", "heuristic", "quantum", "final_score", "site", "username", "pwd", "crackTime"])
 
     for eid in encrypted_entries:
         entry_key = derive_key(vault_key, info = str_to_bytes(eid))
@@ -713,12 +733,12 @@ def audit_vault(encrypted_entries, vault_key: bytes,
                 line += f"Strength: {strength}"
 
             if reused_pw:
-                line += f" | Reused: {reused:2}"
+                line += f" Reused: {reused:2}"
             else:
                 line += " " * 13
 
             if exposed_pw:
-                line += f" | Exposures: {exposures}"
+                line += f" Exposures: {exposures}"
 
             print(line)
 

@@ -649,7 +649,8 @@ def import_csv(filepath, encrypted_entries, vault_key):
             for i in range(len(schema_list)):
                 print(f" {i} - {schema_list[i]}")
             c = get_int(": ")
-            if c is None:
+            
+            if c is None or c < 0 or c > len(schema_list):
                 return
             schema_name = schema_list[c]
 

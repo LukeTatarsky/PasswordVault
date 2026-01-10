@@ -8,7 +8,7 @@ import sys
 # Vault settings
 # ==============================================================
 # Software version
-VERSION = "2.0.0"
+VERSION = "2.0.1"
 
 # Name of encrypted vault file
 if getattr(sys, "frozen", False):
@@ -53,7 +53,7 @@ NONCE_LEN = 12 # DO NOT CHANGE
 # ==============================================================
 PASS_DEFAULTS = {
     "length": 21,                   # Default generated password length
-    "max_length": 1000,               
+    "max_length": 500,
     "min_upper": 4,
     "min_lower": 4,
     "min_digits": 4,
@@ -65,7 +65,8 @@ PASS_DEFAULTS = {
     "symbols_pool":   "!@#()[]|?$%^*_-+.=",
     "use_safe_symbs": False,
     "safe_symbols":   "!@#$&=_-",
-    "phrase_len": 5,
+    "phrase_words": 5,
+    "max_phrase_words": 16,
     "phrase_sep": ["_", "-", ".", "!"],
     "phrase_use_nums": True,
 }

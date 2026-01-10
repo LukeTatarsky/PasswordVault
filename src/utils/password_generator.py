@@ -314,11 +314,15 @@ def ask_password(prompt: str = "Password:") -> bytearray | None:
             diceware = DicewarePassphrase(WORD_LIST) # type: ignore
             pw_len = get_int(
                 f"\n  Enter desired number of words. "
-                f"Press Enter for default of {PASS_DEFAULTS["phrase_len"]}: ", 
-                default=int(PASS_DEFAULTS["phrase_len"])
+                f"Press Enter for default of {PASS_DEFAULTS["phrase_words"]}: ", 
+                default=int(PASS_DEFAULTS["phrase_words"])
                 )
             if pw_len is None:
                 break
+
+            if pw_len > PASS_DEFAULTS["max_phrase_words"]:
+                print(f"  Error: Too long. Maximum allowed is {PASS_DEFAULTS["max_phrase_words"]} words")
+                continue
 
             use_nums = input(f"  Include numbers? (y/n) or Enter for default: ")
             if use_nums == "y":

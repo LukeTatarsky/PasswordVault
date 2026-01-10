@@ -15,7 +15,7 @@ All notable changes to this project will be documented in this file.
 ## [2.0.0] — 2026-01-07
 ### Changed
 - Introduced a hierarchical key structure for the vault.
-- Entry secrets remain encrypted at rest and are decrypted only on explicit user request.
+- Entry secrets remain encrypted at rest and are decrypted upon request.
 
 ### Added
 - csv_export command that exports the vault to plaintext csv
