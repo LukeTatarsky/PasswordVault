@@ -1,0 +1,6 @@
+zxcvbn,heuristic,quantum,final_score,site,username,pwd,crackTime
+0,44.0,0.0,20.03,example.com,john_doe,pass12345,0.00000161 
+0,44.0,0.0,20.03,banksite.net,jdoe123,pass12345,0.00000161 
+0,77.0,0.0,34.8,socialhub.io,johnny,MyS0cialKey!,0.3952 
+0,98.0,0.0,44.02,shoppingstore.ca,j.doe,BuyMore#2024,4.7296 
+0,64.0,0.0,28.69,cloudsync.app,john_backup,Cl0udPass$,0.0003773456 

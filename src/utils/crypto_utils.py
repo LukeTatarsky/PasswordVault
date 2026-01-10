@@ -87,7 +87,7 @@ def decrypt_entry(cipher_blob: bytes, entry_key: bytes, entry_id: str) -> Entry:
 
     # Decrypt
     aead = ChaCha20Poly1305(entry_key)
-    # e_id = entry_id.encode("utf-8")
+
     plaintext_bytes = aead.decrypt(nonce, ciphertext, str_to_bytes(entry_id))
 
     # Parse JSON

@@ -22,6 +22,7 @@ try:
     import pendulum
     from utils.Entry import Entry, bytes_to_str, str_to_bytes, wipe_bytes, print_bytearray
     from utils.crypto_utils import decrypt_entry, encrypt_entry, derive_key
+    from cryptography.exceptions import InvalidTag
     from utils.clipboard_utils import copy_to_clipboard, clear_clipboard_history
     from utils.vault_utils import load_vault, save_vault, list_entries, display_entry, change_master_password
     from utils.user_input import get_note_from_user, get_int, get_keys_from_user, get_totp_from_user
@@ -263,9 +264,22 @@ def entry_menu(encrypted_entries: dict[str, str], vault_key: bytes, eid: str) ->
         logging.error(f"{pendulum.now().to_iso8601_string()} Error retrieving entry {eid}")
         return 1
     entry_key = derive_key(vault_key, info = str_to_bytes(eid))
-    e = decrypt_entry(str_to_bytes(blob), entry_key, eid)
 
-    if e is None:
+    try:
+        e = decrypt_entry(str_to_bytes(blob), entry_key, eid)
+
+    except InvalidTag:
+        print(f"\nFailed to decrypt entry {eid}")
+        logger.error(f"[{pendulum.now().to_iso8601_string()}] corrupted entry {eid}.")
+        c = input("Would you like to delete this entry? (y/n)").strip().lower()
+        if c == "y":
+            encrypted_entries.pop(eid)
+            print(f"\nEntry {eid} deleted")
+            logger.error(f"[{pendulum.now().to_iso8601_string()}] corrupted entry {eid} deleted")
+            save_vault(encrypted_entries, vault_key)
+        return 1
+
+    except Exception:
         # error, back to main
         logging.error(f"{pendulum.now().to_iso8601_string()} Error decrypting entry {eid}")
         return 1
@@ -405,7 +419,7 @@ def main():
 
         print("\n--- Main Menu ---")
         print("\n 1) New Entry    2) Get Entry     7) Quit   9) More Options")
-        choice = input(" > ").strip()
+        choice = input(" > ").strip().lower()
         print()
 
         # == ADD ENTRY =====================================
@@ -454,7 +468,7 @@ def main():
         # == GET ENTRY =======================================
         elif choice == "2":
             print(f"Retrieve a list of entries that match query. " 
-                f"Press Enter to show all entries.")
+                f"\n Press Enter to show all entries.")
             query = input("\n Enter search query: ").strip().lower()
             entries = list_entries(encrypted_entries, vault_key, query)
 

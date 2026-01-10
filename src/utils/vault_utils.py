@@ -47,7 +47,7 @@ def create_vault() -> Tuple[bytes, Dict[str, str], bytes]:
     """
     global vault_salt, sealed_pepper, canary_id, tpm_enabled
 
-    print("\n Would you like to enable TPM protection? (Vault becomes bound to this device.)")
+    print("\n Would you like to enable TPM protection? \n (Vault becomes bound to this device.)")
     choice = input(" (y/n): ").strip()
 
     # Build the vault
@@ -347,6 +347,10 @@ def list_entries(encrypted_entries: dict[str, str], vault_key: bytes,
             entry_key = derive_key(vault_key, info = str_to_bytes(eid))
             entry = decrypt_entry(str_to_bytes(blob), entry_key, eid)
 
+            if entry is None:
+                display_data[eid] = ("corrupted", "entry")
+                continue
+
             # Build searchable text
             searchable_str = " ".join([entry.site, entry.account, entry.note]).lower()
             
@@ -577,13 +581,13 @@ def change_master_password() -> None:
             try:
                 # Decrypt with old key
                 old_entry_key = derive_key(old_vault_key, info=str_to_bytes(eid))
-                plaintext = decrypt_entry(str_to_bytes(old_blob), old_entry_key, eid)
+                entry = decrypt_entry(str_to_bytes(old_blob), old_entry_key, eid)
                 del old_entry_key
 
                 # Encrypt again with new key
                 new_entry_key = derive_key(new_vault_key, info=str_to_bytes(eid))
-                new_blob = encrypt_entry(plaintext, new_entry_key)
-                del plaintext, new_entry_key
+                new_blob = encrypt_entry(entry, new_entry_key)
+                del entry, new_entry_key
                 new_encrypted_entries[eid] = bytes_to_str(new_blob)
 
             except InvalidTag:

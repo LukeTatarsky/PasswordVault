@@ -303,7 +303,7 @@ def ask_password(prompt: str = "Password:") -> bytearray | None:
                 print (f"\n  {e}")
                 continue
 
-            print(f" Generated: ", end="", flush= True)
+            print(f"\n Generated: ", end="", flush= True)
             print_bytearray(pw)
             if input("\n Accept this password? (y/n): ").strip().lower() == "n":
                 continue
