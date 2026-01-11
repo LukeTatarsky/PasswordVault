@@ -8,7 +8,7 @@ import sys
 # Vault settings
 # ==============================================================
 # Software version
-VERSION = "2.0.1"
+VERSION = "2.0.2"
 
 # Name of encrypted vault file
 if getattr(sys, "frozen", False):

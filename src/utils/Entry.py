@@ -130,12 +130,16 @@ class Entry:
 
     # Ephemeral decrypt: yields a bytearray and wipes it automatically
     @contextmanager
-    def get_field(self, field_name: str, entry_key: bytes) -> Iterator[bytearray]:
+    def get_field(self, field_name: str, entry_key: bytes, old_entry_id: str = '') -> Iterator[bytearray]:
         if field_name not in self._fields:
             raise KeyError(f"Field {field_name} does not exist")
         data = self._fields[field_name]
         field_key = self._derive_field_key(entry_key, field_name, data["salt"])
-        decrypted = decrypt_field(self._fields[field_name], field_key, self.entry_id, field_name)
+        if old_entry_id != '':
+            # used when changing password
+            decrypted = decrypt_field(self._fields[field_name], field_key, old_entry_id, field_name)
+        else: 
+            decrypted = decrypt_field(self._fields[field_name], field_key, self.entry_id, field_name)
         try:
             yield decrypted
         finally:

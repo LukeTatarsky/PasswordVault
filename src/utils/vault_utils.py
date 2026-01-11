@@ -577,28 +577,42 @@ def change_master_password() -> None:
 
         # Decrypt and re-encrypt every entry with the new key
         new_encrypted_entries: Dict[str, str] = {}
-        for eid, old_blob in temp_entries.items():
+        for old_eid, old_blob in temp_entries.items():
             try:
                 # Decrypt with old key
-                old_entry_key = derive_key(old_vault_key, info=str_to_bytes(eid))
-                entry = decrypt_entry(str_to_bytes(old_blob), old_entry_key, eid)
-                del old_entry_key
+                old_entry_key = derive_key(old_vault_key, info=str_to_bytes(old_eid))
+                entry = decrypt_entry(str_to_bytes(old_blob), old_entry_key, old_eid)
+
+                # New entry id
+                new_eid = secrets.token_bytes(EID_LEN)
+                while new_eid in new_encrypted_entries:
+                    new_eid = secrets.token_bytes(EID_LEN)
+                new_eid_str = bytes_to_str(new_eid)
+
+                # Set the new entry id for the entry
+                entry.entry_id = new_eid_str
+                new_entry_key = derive_key(new_vault_key, info=new_eid)
+
+                # Decrypt and encrypt _fields with new entry key
+                for fieldname in entry._fields:
+                    # Since we change the eid, the old eid must be provided to decrypt the _fields
+                    with entry.get_field(fieldname, old_entry_key, old_entry_id=old_eid) as plain:
+                        entry.set_field(fieldname, plain, new_entry_key)
 
                 # Encrypt again with new key
-                new_entry_key = derive_key(new_vault_key, info=str_to_bytes(eid))
                 new_blob = encrypt_entry(entry, new_entry_key)
-                del entry, new_entry_key
-                new_encrypted_entries[eid] = bytes_to_str(new_blob)
+                del entry, new_entry_key, old_entry_key
+                new_encrypted_entries[new_eid_str] = bytes_to_str(new_blob)
 
             except InvalidTag:
-                print(f"\nFailed to decrypt entry {eid}")
+                print(f"\nFailed to decrypt entry {old_eid}")
                 print("Aborting password change.")
-                logger.error(f"[{pendulum.now().to_iso8601_string()}] corrupted entry {eid}. Aborting password change")
+                logger.error(f"[{pendulum.now().to_iso8601_string()}] corrupted entry {old_eid}. Aborting password change")
                 return
             except Exception as e:
-                print(f"\nFailed to re-encrypt entry {eid}: {e}")
+                print(f"\nFailed to re-encrypt entry {old_eid}: {e}")
                 print("Aborting password change.")
-                logger.error(f"[{pendulum.now().to_iso8601_string()}] corrupted entry {eid}. Aborting password change")
+                logger.error(f"[{pendulum.now().to_iso8601_string()}] corrupted entry {old_eid}. Aborting password change")
                 return
             
         # Save with the new salt and new encrypted blobs

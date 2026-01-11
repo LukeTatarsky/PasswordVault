@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 ---
 
+## [2.0.2] — 2026-01-11
+### Changed
+- Bug with changing vault password. Fields were not being decrypted before changing keys.
+
+---
+
 ## [2.0.1] — 2026-01-08
 ### Changed
 - TOTP code generator now automatically copies the code to clipboard.
