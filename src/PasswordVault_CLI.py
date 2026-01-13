@@ -279,6 +279,8 @@ def entry_menu(encrypted_entries: dict[str, str], vault_key: bytes, eid: str) ->
             gc.collect()
 
             e = entry
+            if e is None:
+                return 1
             # Show basic info
             if choice_2 == '':
                 display_entry(e, entry_key)
@@ -336,8 +338,8 @@ def entry_menu(encrypted_entries: dict[str, str], vault_key: bytes, eid: str) ->
 
             # == EDIT ENTRY =======================================
             elif choice_2 == "e":
-                e = update_entry(encrypted_entries, e, entry_key, eid, vault_key)
-                if e is None:
+                entry = update_entry(encrypted_entries, e, entry_key, eid, vault_key)
+                if entry is None:
                     return 0
                 choice_2 = ''
                 
