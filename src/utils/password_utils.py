@@ -657,7 +657,7 @@ def audit_vault(encrypted_entries, vault_key: bytes,
 
         if test_strength:
             strength = strength_analysis(e,vault_key)
-            if strength < strength_threshold:
+            if strength <= strength_threshold:
                 results[eid]["issues"]["strength"] = strength
 
         if test_exposure:
@@ -705,7 +705,7 @@ def audit_vault(encrypted_entries, vault_key: bytes,
         weak_pw = (
             test_strength
             and strength > default_strength
-            and strength < strength_threshold
+            and strength <= strength_threshold
         )
 
         reused_pw = (

@@ -10,8 +10,6 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.hashes import SHA3_512
 from config.config_vault import SALT_LEN, NONCE_LEN
 
-
-
 # -----------------------------
 # Field crypto helpers
 # -----------------------------

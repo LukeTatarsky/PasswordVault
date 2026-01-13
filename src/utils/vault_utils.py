@@ -154,10 +154,11 @@ def load_vault(master_pw=None) -> Tuple[bytes, Dict[str, str], bytes]:
             - Derived vault key.
             - Dictionary of encrypted vault entries.
             - Salt used for key derivation.
+            
+        (b'', {}, b''): If the master password verification fails
 
     Raises:
-        SystemExit: If the vault is corrupted, unreadable, or the master
-            password verification fails.
+        SystemExit: If the vault is corrupted or unreadable.
     """
     global vault_salt, canary_id, sealed_pepper, tpm_enabled
     # ==============================================================
@@ -194,71 +195,65 @@ def load_vault(master_pw=None) -> Tuple[bytes, Dict[str, str], bytes]:
         logger.error(f"[{now}] {msg}\n")
         sys.exit(0)
 
-    # During vault export, master password is provided
-    if master_pw is None:
-        # Prompt user for password
-        master_pw = getpass.getpass("Master password: ").encode(UTF8)
-
-    root_key = derive_root_key(master_pw, vault_salt)
-    del master_pw
-
-    # If vault is saved with TPM mode
-    if "sealed_pepper" in vault:
-        # Extract and decrypt the sealed pepper
-        try:
-            sealed_pepper = str_to_bytes(vault["sealed_pepper"])
-            pepper = tpm_decrypt(sealed_pepper)
-            vault_key = derive_key(root_key, salt = pepper)
-            del root_key
-            tpm_enabled = True
-        except Exception as e:
-            msg = f"Error: error occured while decrpyting sealed pepper. \n{e}"
-            print(msg)
-            time.sleep(1)
-            now = pendulum.now().to_iso8601_string()
-            logger.error(f"[{now}] {msg}\n")
-            sys.exit(0)
-
-    # Vault is saved in Portable Mode
-    else:
-        tpm_enabled = False
-        vault_key = derive_key(root_key, salt = vault_salt)
-        del root_key
-
-    # ==============================================================
-    # 3. Verify master password using the canary
-    # ==============================================================
-    if "canary" not in vault or "canary_id" not in vault:
-        msg = "Vault corrupted: missing canary!"
-        print(msg)
-        now = pendulum.now().to_iso8601_string()
-        logger.error(f"[{now}] {msg}\n")
-        sys.exit(0)
-
     try:
-        canary_id = vault["canary_id"]
-        decrypted_canary = decrypt(vault["canary"], vault_key, canary_id)
+        # During vault export, master password is provided
+        if master_pw is None:
+            # Prompt user for password
+            master_pw = getpass.getpass("Master password: ").encode(UTF8)
+            print("...")
 
-        if decrypted_canary != KEY_CHECK_STRING:
-            msg = "Wrong master password!"
+        root_key = derive_root_key(master_pw, vault_salt)
+        del master_pw
+
+        # If vault is saved with TPM mode
+        if "sealed_pepper" in vault:
+            # Extract and decrypt the sealed pepper
+            try:
+                sealed_pepper = str_to_bytes(vault["sealed_pepper"])
+                pepper = tpm_decrypt(sealed_pepper)
+                vault_key = derive_key(root_key, salt = pepper)
+                del root_key
+                tpm_enabled = True
+            except Exception as e:
+                msg = f"Error: error occured while decrpyting sealed pepper. \n{e}"
+                print(msg)
+                time.sleep(1)
+                now = pendulum.now().to_iso8601_string()
+                logger.error(f"[{now}] {msg}\n")
+                return (b'',{},b'')
+
+        # Vault is saved in Portable Mode
+        else:
+            tpm_enabled = False
+            vault_key = derive_key(root_key, salt = vault_salt)
+            del root_key
+
+        # ==============================================================
+        # 3. Verify master password using the canary
+        # ==============================================================
+        try:
+            canary_id = vault["canary_id"]
+            decrypted_canary = decrypt(vault["canary"], vault_key, canary_id)
+
+        except InvalidTag:
+            msg = "Invalid Password!"
             print(msg)
             now = pendulum.now().to_iso8601_string()
             logger.error(f"[{now}] {msg}\n")
-            time.sleep(2)
-            sys.exit(0)
-
+            time.sleep(1)
+            return (b'',{},b'')
+            
+        # ==============================================================
+        # 4. Return entries container
+        # ==============================================================
+        encrypted_entries: Dict[str, str] = vault.get("entries", {})
     except InvalidTag:
         msg = "Wrong master password or vault is corrupted!"
         print(msg)
-        time.sleep(2)
+        time.sleep(1)
         now = pendulum.now().to_iso8601_string()
         logger.error(f"[{now}] {msg}\n")
-        sys.exit(0)
-
-    # ==============================================================
-    # 4. Return entries container
-    # ==============================================================
-    encrypted_entries: Dict[str, str] = vault.get("entries", {})
+        return (b'',{},b'')
 
     print("Vault unlocked successfully.")
     return vault_key, encrypted_entries, vault_salt

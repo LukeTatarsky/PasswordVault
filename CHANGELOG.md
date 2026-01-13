@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 ---
 
+## [2.0.3] — 2026-01-13
+### Changed
+- UI changes. Disabled CTRL-C in the menus. Enabled password retry.
+
+---
+
 ## [2.0.2] — 2026-01-11
 ### Changed
 - Bug with changing vault password. Fields were not being decrypted before changing keys.
