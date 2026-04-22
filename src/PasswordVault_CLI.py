@@ -379,7 +379,7 @@ def entry_menu(encrypted_entries: dict[str, str], vault_key: bytes, eid: str) ->
         
         except InvalidTag:
             print(f"\nFailed to decrypt entry {eid}")
-            logger.error(f"[{pendulum.now().to_iso8601_string()}] corrupted entry {eid}.")
+            logger.error(f"[{pendulum.now().to_iso8601_string()}] Entry Menu - InvalidTag: corrupted entry {eid}.")
             c = input("Would you like to delete this entry? (y/n)").strip().lower()
             if c == "y":
                 encrypted_entries.pop(eid)
@@ -390,7 +390,7 @@ def entry_menu(encrypted_entries: dict[str, str], vault_key: bytes, eid: str) ->
         
         except Exception:
             # error, back to main
-            logging.error(f"{pendulum.now().to_iso8601_string()} Error decrypting entry {eid}")
+            logging.error(f"[{pendulum.now().to_iso8601_string()}] Entry Menu - Exception: Error decrypting entry {eid}")
             return 1
         
     return 0

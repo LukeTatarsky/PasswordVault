@@ -495,12 +495,13 @@ def strength_analysis(e: Entry, vault_key: bytes, *,
         quantum_score * 0.10
         ),2)
     
-    # Debugging TESTING
-    msg = f"{zxcvbn_score},{round(heuristic_score, 0):3},{round(quantum_score, 0):3},{final_score},{e.site},{e.account},{pwd},{zx_results["crack_times_seconds"]["offline_fast_hashing_1e10_per_second"]} "
-    with open("output_file.csv", 'a', newline='') as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(msg.split(','))
-
+    '''
+    # # Debugging TESTING
+    # msg = f"{zxcvbn_score},{round(heuristic_score, 0):3},{round(quantum_score, 0):3},{final_score},{e.site},{e.account},{zx_results["crack_times_seconds"]["offline_fast_hashing_1e10_per_second"]} "
+    # with open("output_file.csv", 'a', newline='') as csvfile:
+    #     writer = csv.writer(csvfile)
+    #     writer.writerow(msg.split(','))
+    '''
 
     del pwd, pw_compressed
 
@@ -626,12 +627,13 @@ def audit_vault(encrypted_entries, vault_key: bytes,
     default_exposures = 0
     default_reused = 0
 
+    '''
         # TESTING
-    # msg = f"{zxcvbn_score},{round(heuristic_score, 0):3},{round(quantum_score, 0):3},{final_score},{e.account},{pwd},{zx_results["crack_times_seconds"]["offline_fast_hashing_1e10_per_second"]} "
-
+    # msg = f"{zxcvbn_score},{round(heuristic_score, 0):3},{round(quantum_score, 0):3},{final_score},{e.account},{zx_results["crack_times_seconds"]["offline_fast_hashing_1e10_per_second"]} "
     with open("output_file.csv", 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(["zxcvbn", "heuristic", "quantum", "final_score", "site", "username", "pwd", "crackTime"])
+    '''
 
     for eid in encrypted_entries:
         entry_key = derive_key(vault_key, info = str_to_bytes(eid))

@@ -7,6 +7,7 @@ import logging
 import base64
 import pendulum
 import copy
+import time
 from ast import literal_eval
 from urllib.parse import urlparse, parse_qs
 
@@ -538,8 +539,9 @@ def import_portable(filepath, encrypted_entries, vault_key):
             decrypted_canary = decrypt(vault["canary"], portable_vault_key, canary_id)
 
             if decrypted_canary != KEY_CHECK_STRING:
-                msg = "Wrong master password!"
+                msg = "Error importing vault. Wrong master password!"
                 print(msg)
+                time.sleep(1)
                 logger.error(f"[{pendulum.now().to_iso8601_string()}] {msg}\n")
                 return False
 
