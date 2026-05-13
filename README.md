@@ -14,13 +14,12 @@ It was built as a personal tool to organize account information, improve passwor
 - Master key derived using a memory-hard password-based key derivation function
 - Optional TPM-backed key sealing (device-bound security)
 - Per-entry secret encryption — secrets remain encrypted until explicitly requested
-- Atomic file saves – never lose data on crash or power loss
 
 ### Password Management
 
 - Truly random password generator using Python’s `secrets` module (customizable)
-- Machine-generated Diceware passphrase generator with randomized capitalization, separators, and digit placement
-- Copy masked passwords to clipboard, auto clears after set time (configurable)
+- Diceware passphrase generator with randomized capitalization, separators, and digit placement
+- Copy masked passwords to clipboard, auto clear after set time (configurable)
 - Password history (configurable)
 - Secure clipboard handling with auto-clear (configurable)
 
@@ -28,22 +27,21 @@ It was built as a personal tool to organize account information, improve passwor
 
 - Secure encrypted storage of TOTP secrets
 - Built-in TOTP code generation
-- QR-code–compatible OTP URI support
+- QR-code–compatible URI support - scannable QR code for authenticator app
 
 ### Optional Security Auditing
 
-- Checks all passwords for  strength, online exposure, and reuse across accounts.
-- Password strength analysis using a combination of heuristics, `zxcvbn`, and post-quantum bonus.
+- Password strength analysis using a combination of heuristics, `zxcvbn`, and post-quantum bonus
 - Breach exposure checks via **Have I Been Pwned** (online, with k-anonymity)
-- Detection of reused passwords accross account in the vault
-- Severity-sorted results wit optional CSV export
+- Detection of reused passwords accross accounts in the vault
+- Severity-sorted results with optional CSV export
 
 ### Import / Export & Migration
 
-- Plaintext JSON & CSV export for backups and migrations
-- Re-import of exported plaintext JSON backup
-- CSV import support for migrating from other password managers and browser exports
-- Portable mode vault import/export.
+- Export plaintext JSON & CSV for backups and migrations
+- Import exported plaintext JSON backups
+- Import CSV for migrating from other password managers and browser exports
+- Import/Export Portable Mode vault
 
 ---
 
@@ -116,13 +114,6 @@ If the TPM is cleared or the device is lost, TPM-sealed data **cannot** be reco
 
 All of these cases are mitigated by creating a **portable mode** backup.
 
-
-### **Runtime Security**
-
-TPM protection applies **only** while the vault is locked.
-
-This is a limitation shared by all software password managers.
-
 ---
 # Portable Mode
 
@@ -159,7 +150,7 @@ Scores ≥ 95% indicate passwords whose strength meaningfully benefits from the 
 | [50, 60)       | Acceptable             |
 | [60, 70)       | Decent                 |
 | [70, 80)       | Strong                 |
-| [80, 90)       | Pretty Strong          |
+| [80, 90)       | Stronger               |
 | [90, 90.5)     | Very Strong            |
 | [90.5, 91)     | Super Strong           |
 | [91, 95)       | Exceptional            |
@@ -302,5 +293,7 @@ Steps:
 This project is intended for personal and educational use. Use at your own risk.
 
 This tool is as secure as your master password and your machine.
+
+TPM protection applies **only** while the vault is locked. This is a limitation shared by all software password managers.
 
 No software password manager can completely protect you from malware running on your system.
