@@ -10,7 +10,7 @@ It was built as a personal tool to organize account information, improve passwor
 ### Core Security
 
 - Authenticated encryption for all vault data with integrity protection
-- Hierarchical key architecture (v2.0+)
+- Hierarchical key architecture
 - Master key derived using a memory-hard password-based key derivation function
 - Optional TPM-backed key sealing (device-bound security)
 - Per-entry secret encryption — secrets remain encrypted until explicitly requested
