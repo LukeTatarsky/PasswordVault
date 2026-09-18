@@ -10,7 +10,7 @@ import sys
 # Software version
 VERSION = "2.0.3"
 
-DEGUB = False
+DEBUG = False
 
 # Name of encrypted vault file
 if getattr(sys, "frozen", False):
