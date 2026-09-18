@@ -10,6 +10,8 @@ import sys
 # Software version
 VERSION = "2.0.3"
 
+DEGUB = False
+
 # Name of encrypted vault file
 if getattr(sys, "frozen", False):
     # PyInstaller executable
