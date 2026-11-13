@@ -281,7 +281,7 @@ Steps:
 - If TPM mode is enabled, keep **at least one Portable Mode backup**
     - Store this backup offline and separate from your device
 - Maintain at least one plaintext export for disaster recovery
-    - Store securely (e.g., encrypted external media or offline storage)
+    - Store securely (e.g., external media/offline storage)
 
 
 ## Disclaimer
