@@ -106,9 +106,7 @@ While highly recommended, TPM mode is **not** suitable for all users.
 Do **not** enable TPM mode if you require:
 
 - Cross-device vault access
-- Cloud sync without re-encryption
-- Guaranteed recovery after OS, motherboard, or TPM replacement
-- Access after hardware failure or device loss
+- Guaranteed recovery after OS reinstall, hardware failure, or device loss
 
 If the TPM is cleared or the device is lost, TPM-sealed data **cannot** be recovered.
 
@@ -117,7 +115,7 @@ All of these cases are mitigated by creating a **portable mode** backup.
 ---
 # Portable Mode
 
-To support backups and migration, the vault can be exported in **portable mode**. 
+To support cross-device vault access and guaranteed recovery, the vault can be exported in **portable mode**. 
 
 Portable mode:
 
@@ -130,13 +128,11 @@ Portable mode vaults:
 - Are suitable for offsite backups
 - Can be imported into new vaults (TPM-enabled or not)
 
-It is strongly recommended to Keep **at least one portable backup** if TPM mode is enabled.
+It is strongly recommended to **keep at least one portable backup** if TPM mode is enabled.
 
 ---
 ## Password Strength Analysis
 The vault now includes an advanced password strength tester that goes beyond simple length and character checks. It combines heuristic rules, entropy estimation, and post-quantum considerations to provide a more realistic assessment of password security.
-
-Scores > 90% indicate passwords whose strength is slightly boosted by the post-quantum entropy bonus.
 
 Scores ≥ 95% indicate passwords whose strength meaningfully benefits from the post-quantum entropy bonus.
 
