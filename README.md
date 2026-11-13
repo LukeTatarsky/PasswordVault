@@ -256,7 +256,7 @@ google,johndoe@gmail.com,trustno1,Personal email account
 ```
 Unsupported fields are preserved internally and reappear on export.
 
-Currently supports Bitwarden csv exports.
+Currently supports Bitwarden, Proton Pass, Chrome, Firefox, Opera, edge and PasswordVault csv exports.
 
 Steps:
 
