@@ -2,7 +2,7 @@
 
 **PasswordVault** is an offline, cryptographically secure password manager written in Python. It operates offline by default and stores all data in a single encrypted vault file.
 
-It was built as a personal tool to organize account information, improve password strength, and store data safely on a local machine without relying on any cloud service.
+It was built as a personal tool to organize account information, improve password strength, and store data safely on a local machine without relying on a cloud service.
 
 ---
 # Features
